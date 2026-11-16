@@ -1,0 +1,7 @@
+node_modules/
+data/profiles/
+data/assets/
+data/*.local.json
+.analysis/raw/cookies.json
+.DS_Store
+data/db.json
