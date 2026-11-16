@@ -5,6 +5,8 @@ data/*.local.json
 .analysis/raw/cookies.json
 .DS_Store
 data/db.json
+data/veda.device.json
+data/.server.lock
 .analysis/raw/app-*.js
 .analysis/raw/submit*.json
 data/accounts/
