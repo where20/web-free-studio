@@ -51,8 +51,11 @@
 - 同 repo 有并行会话开发过（17:45 参考素材功能），改文件前先看 `git status` + mtime，小步提交。
 - **launchctl bootstrap 与 crontab 都被沙箱禁用**（连最小 plist 都报 `Input/output error`）→ 做不了开机自启。
   解法：daemon 由 MCP 适配层**按需自动拉起**（spawn + 轮询探测 ≤15s + 端口占用复用）。
-- **git push 必须走代理**（直连超时），但代理偶发 `Empty reply from server` → 重试即可。
+- **git push 必须用系统代理 `127.0.0.1:6696`**（`scutil --proxy` 可查；环境变量里的 56658 会 502，
+  直连 git 会超时）；配 `gh auth token` 直供 credential helper 避免 keychain 被沙箱拦。
   `rsync --delete` 别忘了 `--exclude=.git`，否则会删掉仓库历史。
+- 线上仓库：`github.com/where20/web-free-studio`（主项目，2026-11-16 22:10 首推）与
+  `github.com/where20/web-free-studio-mcp`（MCP 适配层独立发布仓）并存。
 
 ## MCP 通用化（v0.3 · 2026-11-16 18:30）
 
