@@ -196,9 +196,10 @@ class BaseLane {
   }
 
   async downloadViaLane(id, out) {
-    // ego 页内 evaluate 有 15s 硬上限（setDefaultTimeout 也改不掉），
-    // 不能在页面里下完整视频。改为只借页面解析 /content 的 302 重定向
-    // 拿到新鲜 CDN 直链（只等响应头，秒级返回），再由 Node 直接下载公开 CDN。
+    // ego 页内 evaluate 有 15s 硬上限（setDefaultTimeout 也改不掉）。
+    // 快路径：只借页面解析 /content 的 302 重定向拿新鲜 CDN 直链（秒级），Node 直接下公开 CDN。
+    // 慢路径：/content 直接 200 返回本体（CDN 直链失效时的常见形态，尤其停机后补镜像的旧任务），
+    // 页内后台启动下载（立即返回、不受 evaluate 超时约束）→ 轮询完成 → 分片读出。
     const info = await this.exec(
       `(async () => {
         const ctl = new AbortController();
@@ -210,13 +211,75 @@ class BaseLane {
         return { url: r.url, status: r.status, type: ct };
       })()`,
       30_000,
-    );
-    if (!info || info.status >= 400) throw new UpstreamError(`内容地址解析失败 ${info?.status ?? "无响应"}`);
-    if (!info.url || !info.url.startsWith(UPSTREAM.contentHost)) {
-      // /content 直接 200 返回本体（而非 302 到公开 CDN）时，Node 无法绕过 TLS 指纹拦截
-      throw new UpstreamError(`未拿到 CDN 直链（${info.url || "无 url"}）`);
+    ).catch(() => null);
+    if (info && info.status < 400 && info.url && info.url.startsWith(UPSTREAM.contentHost)) {
+      return downloadTo(info.url, out, 600_000);
     }
-    return downloadTo(info.url, out);
+    return this.downloadInPage(id, out);
+  }
+
+  /** 页内分片下载：后台 fetch 存 window.__dl，轮询完成后按 1MB 分片读出 base64 */
+  async downloadInPage(id, out) {
+    const started = await this.exec(
+      `(() => {
+        if (window.__dl) { try { window.__dl.ctl.abort(); } catch (e) {} }
+        const ctl = new AbortController();
+        const d = { done: false, len: 0, err: null, buf: null, ctl };
+        window.__dl = d;
+        fetch("/v1/videos/${id}/content", { credentials: "include", signal: ctl.signal })
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); })
+          .then((b) => { d.buf = b; d.len = b.byteLength; d.done = true; })
+          .catch((e) => { d.err = String((e && e.message) || e); d.done = true; });
+        return { started: true };
+      })()`,
+      30_000,
+    );
+    if (!started?.started) throw new UpstreamError("页内下载启动失败");
+    const cleanup = () =>
+      this.exec(`(() => { if (window.__dl) { try { window.__dl.ctl.abort(); } catch (e) {} delete window.__dl; } return true; })()`, 30_000).catch(() => {});
+
+    const deadline = Date.now() + 600_000;
+    let st = null;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5_000));
+      st = await this.exec(
+        `(() => { const d = window.__dl; return d ? { done: d.done, len: d.len, err: d.err } : { gone: true }; })()`,
+        30_000,
+      );
+      if (st?.gone) throw new UpstreamError("页内下载状态丢失（页面被导航重置）");
+      if (st?.err) { await cleanup(); throw new UpstreamError(`页内下载失败：${st.err}`); }
+      if (st?.done) break;
+    }
+    if (!st?.done) { await cleanup(); throw new UpstreamError("页内下载超时（10 分钟）"); }
+    const total = st.len || 0;
+    if (!total) { await cleanup(); throw new UpstreamError("页内下载结果为空"); }
+
+    const CHUNK = 1_000_000;
+    const parts = [];
+    for (let off = 0; off < total; off += CHUNK) {
+      const len = Math.min(CHUNK, total - off);
+      const b64 = await this.exec(
+        `(() => {
+          const b = new Uint8Array(window.__dl.buf, ${off}, ${len});
+          let s = "";
+          for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+          return btoa(s);
+        })()`,
+        60_000,
+      );
+      if (typeof b64 !== "string" || !b64) {
+        await cleanup();
+        throw new UpstreamError(`分片读取失败 @${off}`);
+      }
+      parts.push(Buffer.from(b64, "base64"));
+    }
+    await cleanup();
+    const buf = Buffer.concat(parts);
+    if (buf.length !== total) throw new UpstreamError(`分片长度不符 ${buf.length}/${total}`);
+    const tmp = `${out}.part`;
+    await fs.writeFile(tmp, buf);
+    await fs.rename(tmp, out);
+    return buf.length;
   }
 }
 
