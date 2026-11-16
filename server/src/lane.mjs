@@ -174,8 +174,10 @@ class BaseLane {
     else {
       const cdn = task.video?.cdn_url;
       try {
+        // 首试限时 120s：健康的 CDN 直链几秒内就能下完（实测 1.5MB/数秒），
+        // 而被限速到几 KB/s 的死链 600s 也下不完，等满纯属浪费队列时间
         bytes = cdn && cdn.startsWith(UPSTREAM.contentHost)
-          ? await downloadTo(cdn, out)
+          ? await downloadTo(cdn, out, 120_000)
           : await this.downloadViaLane(id, out);
       } catch (e) {
         // CDN 直链失效时回落到带 Cookie 的 /content（302 到新的 CDN 地址）
@@ -595,8 +597,8 @@ console.log("__FS__" + JSON.stringify({ ok }));
   }
 }
 
-async function downloadTo(url, out) {
-  const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(600_000) });
+async function downloadTo(url, out, timeoutMs = 600_000) {
+  const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new UpstreamError(`下载失败 ${res.status}`, { status: res.status });
   const buf = Buffer.from(await res.arrayBuffer());
   const tmp = `${out}.part`;
