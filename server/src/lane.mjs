@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { Page, sleep } from "./cdp.mjs";
 import { getBrowser } from "./chrome.mjs";
 import { ASSET_DIR, UPSTREAM } from "./config.mjs";
+import { readCookies, writeCookies } from "./cookies.mjs";
 
 export class AuthError extends Error {
   constructor(message = "未登录或登录已失效") {
@@ -70,6 +71,18 @@ class BaseLane {
     const next = this.locked.then(fn, fn);
     this.locked = next.catch(() => {});
     return next;
+  }
+
+  /** 该账号当前保存的 cookie（用于注入浏览器） */
+  async cookies() {
+    return readCookies(this.accountId);
+  }
+
+  /** 从浏览器回读 cookie 并落盘（登录/换号后调用） */
+  async captureCookies() {
+    const rows = await this.readBrowserCookies();
+    if (rows.length) await writeCookies(this.accountId, rows);
+    return rows;
   }
 
   async api(apiPath, opts = {}) {
@@ -226,6 +239,12 @@ export class ChromeLane extends BaseLane {
     if (!(await browser.alive())) await browser.launch();
     this.page = await Page.open(browser.port, UPSTREAM.videoPage);
     await this.waitOrigin();
+    const jar = await this.cookies();
+    if (jar.length) {
+      await this.applyCookieJar(jar, this.page).catch(() => {});
+      await this.page.reload({ timeoutMs: 30_000 }).catch(() => {});
+      await this.waitOrigin();
+    }
     return this.page;
   }
 
@@ -238,6 +257,70 @@ export class ChromeLane extends BaseLane {
       await sleep(200);
     }
     throw new Error("页面未能进入 paba.tv 域");
+  }
+
+  async readBrowserCookies() {
+    const page = await this.ensurePage();
+    await page.send("Network.enable");
+    const res = await page.send("Network.getAllCookies");
+    return (res.cookies || [])
+      .filter((c) => /paba\.tv$/.test(c.domain))
+      .map((c) => ({
+        name: c.name,
+        value: c.value,
+        path: c.path,
+        domain: c.domain,
+        httpOnly: c.httpOnly,
+        secure: c.secure,
+        expires: c.expires > 0 ? Math.floor(c.expires) : undefined,
+      }));
+  }
+
+  async applyCookieJar(jar, pageArg = null) {
+    const page = pageArg || (await this.ensurePage());
+    await page.send("Network.enable");
+    for (const n of ["h3v", "h3s", "__Host-h3d"]) {
+      await page.send("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }).catch(() => {});
+    }
+    for (const c of jar) {
+      await page
+        .send("Network.setCookie", {
+          name: c.name,
+          value: c.value,
+          url: "https://www.paba.tv/",
+          path: "/",
+          httpOnly: true,
+          secure: true,
+          ...(c.expires ? { expires: c.expires } : {}),
+        })
+        .catch(() => {});
+    }
+  }
+
+  async loginWithPassword(email, password) {
+    const page = await this.ensurePage();
+    await page.send("Network.enable");
+    for (const n of ["h3v", "h3s", "__Host-h3d"]) {
+      await page.send("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }).catch(() => {});
+    }
+    const res = await page.evaluate(
+      jsFetchExpr("/auth/account/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      }),
+    );
+    const payload = res?.result?.value ?? res?.value;
+    if (!payload || payload.status >= 400 || payload.json?.ok === false) {
+      const msg = payload?.json?.error?.message || payload?.json?.error || "登录失败";
+      throw Object.assign(new Error(typeof msg === "string" ? msg : JSON.stringify(msg)), {
+        code: payload?.json?.error?.code || "login_failed",
+      });
+    }
+    const cookies = await this.readBrowserCookies();
+    if (!cookies.some((c) => c.name === "h3v")) throw new Error("登录后没有拿到会话 cookie");
+    await writeCookies(this.accountId, cookies);
+    return payload.json;
   }
 
   async exec(expr, timeoutMs = 60_000) {
@@ -351,10 +434,61 @@ console.log("__FS__" + JSON.stringify({ ok: true }));
     }
   }
 
-  async execOnce(expr, timeoutMs = 60_000) {
+  /** 当前浏览器里 paba.tv 的 cookie */
+  async readBrowserCookies() {
+    const script = `
+const SPACE = ${JSON.stringify(this.spaceName)};
+const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
+const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
+let page = (await task.pages())[0] || (await task.newPage());
+await page.cdp("Network.enable");
+const res = await page.cdp("Network.getAllCookies");
+const rows = (res.cookies || []).filter((c) => /paba\.tv$/.test(c.domain)).map((c) => ({
+  name: c.name, value: c.value, path: c.path, domain: c.domain,
+  httpOnly: c.httpOnly, secure: c.secure, expires: c.expires > 0 ? Math.floor(c.expires) : undefined,
+}));
+console.log("__FS__" + JSON.stringify(rows));
+`;
+    const out = await this.execRaw(script, 60_000);
+    return Array.isArray(out) ? out : [];
+  }
+
+  /** 用邮箱密码在该账号的环境里登录，成功后回读 cookie */
+  async loginWithPassword(email, password) {
+    const expr = jsFetchExpr("/auth/account/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const payload = await this.execOnce(expr, 60_000, { clear: true });
+    if (!payload || payload.status === 0) {
+      throw new UpstreamError(`登录请求失败：${payload?.text || "无响应"}`);
+    }
+    if (payload.status >= 400 || payload.json?.ok === false) {
+      const msg =
+        payload.json?.error?.message ||
+        payload.json?.error ||
+        `登录失败（HTTP ${payload.status}）`;
+      throw Object.assign(new Error(typeof msg === "string" ? msg : JSON.stringify(msg)), {
+        code: payload.json?.error?.code || "login_failed",
+      });
+    }
+    const cookies = await this.readBrowserCookies();
+    if (!cookies.some((c) => c.name === "h3v")) {
+      throw new Error("登录后没有拿到会话 cookie");
+    }
+    await writeCookies(this.accountId, cookies);
+    return payload.json;
+  }
+
+  async execOnce(expr, timeoutMs = 60_000, opts = {}) {
+    const jar = opts.clear ? [] : await this.cookies();
+    const inject = Boolean(opts.clear) || jar.length > 0;
     const script = `
 const SPACE = ${JSON.stringify(this.spaceName)};
 const EXPR = ${JSON.stringify(expr)};
+const JAR = ${JSON.stringify(jar)};
+const INJECT = ${inject ? "true" : "false"};
 const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
 const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
 let page = (await task.pages())[0];
@@ -362,6 +496,20 @@ if (!page) page = await task.newPage();
 const cur = await page.url();
 if (!String(cur).startsWith(${JSON.stringify(UPSTREAM.origin)})) {
   await page.goto(${JSON.stringify(UPSTREAM.videoPage)}, { timeout: 60000 });
+}
+if (INJECT) {
+  await page.cdp("Network.enable");
+  for (const n of ["h3v", "h3s", "__Host-h3d"]) {
+    try { await page.cdp("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }); } catch {}
+  }
+  for (const c of JAR) {
+    try {
+      await page.cdp("Network.setCookie", {
+        name: c.name, value: c.value, url: "https://www.paba.tv/", path: "/",
+        httpOnly: true, secure: true, ...(c.expires ? { expires: c.expires } : {}),
+      });
+    } catch {}
+  }
 }
 const value = await page.evaluate(EXPR);
 console.log("__FS__" + JSON.stringify(value === undefined ? null : value));

@@ -21,6 +21,7 @@ import {
 } from "./store.mjs";
 import { laneFor, AuthError, ChallengeError } from "./lane.mjs";
 import { precheck, enqueue, waitJob, pickAccountId, queueStats, getJob } from "./queue.mjs";
+import { readCookies, writeCookies, deleteCookies, writeCred, readCred, maskCookies } from "./cookies.mjs";
 import { getBrowser, stopBrowser } from "./chrome.mjs";
 import { syncAccount, syncAll } from "./sync.mjs";
 import { addClient, emit } from "./events.mjs";
@@ -236,45 +237,118 @@ export async function syncOne(accountId) {
  * 导入已有登录态：把 h3v / h3s / __Host-h3d 等 cookie 注入该账号专属 profile。
  * 适合「浏览器里已经登录过」的账号迁移，避免再走一次 OAuth。
  */
+const bad = (msg) => Object.assign(new Error(msg), { code: "validation" });
+
+/** 手动导入 cookie：直接落盘 + 通过车道校验，不依赖本机 Chrome */
 export async function seedCookies(accountId, cookies) {
   const account = await getAccount(accountId);
-  if (!account) throw new Error(`账号不存在：${accountId}`);
-  if (!Array.isArray(cookies) || !cookies.length) throw new Error("cookies 为空");
-  const browser = await ensureBrowser(accountId, { headless: true });
-  const page = await Page.open(browser.port, "https://www.paba.tv/");
-  await page.send("Network.enable");
-  for (const c of cookies) {
-    const params = {
-      name: c.name,
-      value: c.value,
-      url: "https://www.paba.tv/",
-      path: c.path || "/",
-      secure: true,
-      httpOnly: c.httpOnly !== false,
-      sameSite: c.sameSite || "Lax",
-    };
-    if (c.expires && Number(c.expires) > 0) params.expires = Number(c.expires);
-    await page.send("Network.setCookie", params);
+  if (!account || account.status === "removed") throw bad(`账号不存在：${accountId}`);
+  if (!Array.isArray(cookies) || !cookies.length) throw bad("cookies 为空");
+  if (!cookies.some((c) => c.name === "h3v")) {
+    throw bad("缺少 h3v（身份 cookie），至少要有 h3v / h3s / __Host-h3d 三条");
   }
-  await sleep(300);
-  const me = await page
-    .evaluate(`fetch('/auth/me',{credentials:'include'}).then(r=>r.json()).catch(()=>({}))`)
-    .then((r) => r?.result?.value ?? r?.value);
+  await writeCookies(accountId, cookies);
+  const lane = laneFor(account);
+  const me = await lane.me();
   if (!me?.ok) {
-    await logEvent("cookie_seed_failed", `[${account.label}] cookie 注入后仍未登录`, { accountId });
-    throw new Error("cookie 无效或已过期");
+    await deleteCookies(accountId);
+    await logEvent("cookie_seed_failed", `[${account.label}] cookie 校验失败`, { accountId });
+    throw bad("cookie 无效或已过期（/auth/me 返回未登录）");
   }
   await upsertAccount({
     id: accountId,
     status: "online",
     upstreamUserId: me.user_id,
     lastSeenAt: Date.now(),
-    headless: true,
+    lastError: null,
+    cookieUpdatedAt: Date.now(),
   });
   await logEvent("cookie_seeded", `[${account.label}] 已导入登录态 ${me.user_id}`, { accountId });
-  await page.close();
   await syncAccount(await getAccount(accountId));
   return { ok: true, userId: me.user_id };
+}
+
+/** 账号密码登录：车道内 POST /auth/account/login，成功后自动存 cookie */
+export async function loginWithPassword(accountId, { email, password, remember = true } = {}) {
+  const account = await getAccount(accountId);
+  if (!account) throw bad(`账号不存在：${accountId}`);
+  if (!email || !password) throw bad("邮箱和密码都要填");
+  const lane = laneFor(account);
+  let payload;
+  try {
+    payload = await lane.loginWithPassword(email, password);
+  } catch (e) {
+    await logEvent("password_login_failed", `[${account.label}] ${e.message}`, { accountId });
+    throw e;
+  }
+  if (remember) await writeCred(accountId, { email, password });
+  const me = await lane.me();
+  if (!me?.ok) throw bad("登录返回成功但没有拿到会话，请改用 cookie 导入");
+  await upsertAccount({
+    id: accountId,
+    status: "online",
+    upstreamUserId: me.user_id,
+    lastSeenAt: Date.now(),
+    lastError: null,
+    email,
+    cookieUpdatedAt: Date.now(),
+  });
+  await logEvent("password_login_ok", `[${account.label}] 账号密码登录成功 ${me.user_id}`, { accountId });
+  await syncAccount(await getAccount(accountId));
+  return { ok: true, userId: me.user_id };
+}
+
+/** 修改账号信息（备注 / 后端 / 启停） */
+export async function updateAccount(accountId, patch = {}) {
+  const account = await getAccount(accountId);
+  if (!account) throw bad(`账号不存在：${accountId}`);
+  const next = {};
+  if (typeof patch.label === "string" && patch.label.trim()) next.label = patch.label.trim().slice(0, 40);
+  if (patch.backend === "ego" || patch.backend === "chrome") next.backend = patch.backend;
+  if (typeof patch.disabled === "boolean") next.disabled = patch.disabled;
+  if (typeof patch.note === "string") next.note = patch.note.slice(0, 200);
+  const updated = await upsertAccount({ id: accountId, ...next });
+  await logEvent("account_updated", `[${updated.label}] 账号信息已更新`, { accountId });
+  return JSON.parse(JSON.stringify(updated));
+}
+
+/** 账号详情（用于编辑弹窗） */
+export async function accountDetail(accountId) {
+  const account = await getAccount(accountId);
+  if (!account) throw bad(`账号不存在：${accountId}`);
+  const cookies = await readCookies(accountId);
+  const cred = await readCred(accountId);
+  return {
+    id: account.id,
+    label: account.label,
+    backend: account.backend || "ego",
+    disabled: Boolean(account.disabled),
+    note: account.note || "",
+    status: account.status,
+    upstreamUserId: account.upstreamUserId || "",
+    email: account.email || cred?.email || "",
+    hasPassword: Boolean(cred?.password),
+    cookies: maskCookies(cookies),
+    cookieCount: cookies.length,
+    cookieUpdatedAt: account.cookieUpdatedAt || null,
+    usage: null,
+  };
+}
+
+/** 启动时给还没有 cookie 文件的 ego 账号补一份（趁浏览器还是它自己的登录态） */
+export async function ensureCookieJars() {
+  const accounts = await listAccounts();
+  for (const a of accounts) {
+    if (a.status !== "online" || a.backend === "chrome" || a.disabled) continue;
+    const jar = await readCookies(a.id);
+    if (jar.length) continue;
+    try {
+      const rows = await laneFor(a).captureCookies();
+      if (rows.length) await logEvent("cookie_snapshot", `[${a.label}] 已快照 ${rows.length} 条 cookie`, { accountId: a.id });
+    } catch (e) {
+      await logEvent("cookie_snapshot_failed", `[${a.label}] ${e.message}`, { accountId: a.id });
+    }
+  }
 }
 
 export async function solveChallengeFor(accountId) {
@@ -395,19 +469,6 @@ export function createServer() {
         const body = await readBody(req);
         const id = (body.id || `acct-${Date.now().toString(36)}`).replace(/[^\w-]/g, "");
         const backend = body.backend || process.env.LANE || "chrome";
-        if (backend === "ego") {
-          const others = (await listAccounts()).filter(
-            (a) => a.id !== id && a.backend === "ego" && a.status !== "removed",
-          );
-          if (others.length) {
-            throw Object.assign(
-              new Error(
-                `ego 后端共用一个浏览器会话，只能接管 1 个账号（已有 ${others[0].label}）。第 2 个账号请用「浏览器登录」或「导入 Cookie」。`,
-              ),
-              { code: "validation" },
-            );
-          }
-        }
         const account = await upsertAccount({
           id,
           label: body.label || id,
@@ -415,6 +476,8 @@ export function createServer() {
           headless: true,
           backend,
           disabled: false,
+          lastError: null,
+          removedAt: null,
         });
         await logEvent("account_added", `新增账号槽位 ${id}（${backend}）`, { accountId: id });
         if (body.login) {
@@ -424,10 +487,21 @@ export function createServer() {
         return json(res, 200, accountView(account));
       }
 
-      const acctMatch = p.match(/^\/api\/accounts\/([^/]+)\/(login|sync|challenge|delete|cookies|toggle)$/);
+      const acctMatch = p.match(
+        /^\/api\/accounts\/([^/]+)\/(login|sync|challenge|delete|cookies|toggle|detail|update|login-password)$/,
+      );
       if (acctMatch) {
         const [, id, action] = acctMatch;
         if (action === "login") return json(res, 200, startLogin(id));
+        if (action === "detail") return json(res, 200, await accountDetail(id));
+        if (action === "update" && req.method === "POST") {
+          const body = await readBody(req);
+          return json(res, 200, await updateAccount(id, body));
+        }
+        if (action === "login-password" && req.method === "POST") {
+          const body = await readBody(req);
+          return json(res, 200, await loginWithPassword(id, body));
+        }
         if (action === "sync") return json(res, 200, await syncOne(id));
         if (action === "challenge") return json(res, 200, await solveChallengeFor(id));
         if (action === "toggle" && req.method === "POST") {
@@ -513,9 +587,11 @@ export function createServer() {
               ? 400
               : e.code === "too_many_pending"
                 ? 409
-                : e.code === "chrome_unavailable"
-                  ? 503
-                  : 500;
+                : e.code === "login_failed"
+                  ? 401
+                  : e.code === "chrome_unavailable"
+                    ? 503
+                    : 500;
       return json(res, code, { error: e.message, code: e.code || "error" });
     }
   });
@@ -524,6 +600,7 @@ export function createServer() {
 
 export async function startServer() {
   await pruneTasks();
+  await ensureCookieJars().catch(() => {});
   const server = createServer();
   await new Promise((resolve, reject) => {
     server.once("error", (e) => {

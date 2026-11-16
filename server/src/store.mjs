@@ -95,8 +95,9 @@ export async function listAccounts() {
 
 /* ---------- tasks ---------- */
 
-export function taskKey(accountId, upstreamId) {
-  return `${accountId}:${upstreamId}`;
+// 上游任务 id 全局唯一，直接用它做主键（同一任务可能被不同账号槽位抓过）
+export function taskKey(_accountId, upstreamId) {
+  return String(upstreamId);
 }
 
 export async function upsertTask(task) {
@@ -127,13 +128,30 @@ export async function listTasks({ accountId, limit = 200 } = {}) {
 export async function getTask({ accountId, upstreamId }) {
   const db = await load();
   return (
-    db.tasks.find((t) => t.accountId === accountId && t.upstreamId === upstreamId) || null
+    db.tasks.find((t) => t.upstreamId === upstreamId) ||
+    db.tasks.find((t) => t.accountId === accountId && t.upstreamId === upstreamId) ||
+    null
   );
 }
 
 export async function pruneTasks() {
   return update((db) => {
-    db.tasks = db.tasks.slice(0, 4000);
+    // 按 upstreamId 去重：保留「有本地资产」或「更新时间较新」的那条
+    const keep = new Map();
+    for (const t of db.tasks) {
+      const prev = keep.get(t.upstreamId);
+      if (!prev) {
+        keep.set(t.upstreamId, t);
+        continue;
+      }
+      const better =
+        (t.asset?.video && !prev.asset?.video) ||
+        (!t.asset?.video === !prev.asset?.video && (t.updatedAt || 0) > (prev.updatedAt || 0));
+      if (better) keep.set(t.upstreamId, t);
+    }
+    db.tasks = [...keep.values()]
+      .sort((a, b) => (b.upstreamCreatedAt || b.createdAt) - (a.upstreamCreatedAt || a.createdAt))
+      .slice(0, 4000);
   });
 }
 

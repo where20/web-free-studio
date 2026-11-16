@@ -7,3 +7,4 @@ data/*.local.json
 data/db.json
 .analysis/raw/app-*.js
 .analysis/raw/submit*.json
+data/accounts/

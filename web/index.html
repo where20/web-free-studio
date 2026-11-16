@@ -174,7 +174,8 @@
     <h4>新增账号<button id="addClose" aria-label="关闭">×</button></h4>
     <div class="tabs">
       <button data-tab="browser" class="on">浏览器登录</button>
-      <button data-tab="cookie">导入 Cookie</button>
+      <button data-tab="cookie">粘贴 Cookie</button>
+      <button data-tab="password">邮箱密码</button>
       <button data-tab="ego">接管 ego 会话</button>
     </div>
     <div class="pane" data-pane="browser">
@@ -199,6 +200,19 @@
         <button id="addCookieGo" class="primary">导入并校验</button>
       </div>
     </div>
+    <div class="pane" data-pane="password" hidden>
+      <label class="f" style="margin-top:0">账号备注</label>
+      <input id="addLabel4" placeholder="如 小号A" />
+      <div class="row" style="margin-top:8px">
+        <div><label class="f">邮箱</label><input id="addEmail" placeholder="you@example.com" /></div>
+        <div><label class="f">密码</label><input id="addPwd" type="password" placeholder="账号密码" /></div>
+      </div>
+      <div class="steps" style="margin-top:10px">
+        服务会在本地浏览器环境里调 <code>/auth/account/login</code> 换会话，成功后自动保存 cookie。<br/>
+        密码只存在本机 <code>data/accounts/&lt;id&gt;.cred.json</code>（0600），不上传任何地方。
+      </div>
+      <div class="foot"><button id="addPwdGo" class="primary">登录并接入</button></div>
+    </div>
     <div class="pane" data-pane="ego" hidden>
       <label class="f" style="margin-top:0">账号备注</label>
       <input id="addLabel3" placeholder="如 主账号" />
@@ -207,6 +221,46 @@
         ego 只有一个浏览器 profile，所以只能接管 <b>1 个</b>账号；第 2 个账号请用前两种方式。
       </div>
       <div class="foot"><button id="addEgoGo" class="primary">接管会话</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="editModal" hidden>
+  <div class="sheet">
+    <h4>账号信息<button id="editClose" aria-label="关闭">×</button></h4>
+    <div class="pane">
+      <div class="row">
+        <div><label class="f" style="margin-top:0">备注</label><input id="editLabel" /></div>
+        <div><label class="f" style="margin-top:0">执行后端</label>
+          <select id="editBackend"><option value="ego">ego 浏览器</option><option value="chrome">本机 Chrome</option></select></div>
+      </div>
+      <label class="f">当前状态</label>
+      <div class="hint" id="editStatus" style="margin:0"></div>
+
+      <label class="f">邮箱密码登录（可选，用于重新换会话）</label>
+      <div class="row">
+        <input id="editEmail" placeholder="邮箱" />
+        <input id="editPwd" type="password" placeholder="密码（留空则不改）" />
+      </div>
+      <div class="foot" style="margin-top:8px">
+        <button id="editPwdGo">用密码登录</button>
+      </div>
+
+      <label class="f">Cookie（当前 <span id="editCookieInfo">0</span> 条）</label>
+      <textarea id="editCookies" placeholder='粘贴完整 cookie 数组覆盖当前登录态：[{"name":"h3v","value":"..."},...]'></textarea>
+      <div class="foot" style="margin-top:8px">
+        <button id="editCookieGo">保存 Cookie 并校验</button>
+      </div>
+
+      <label class="f">其它</label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub)">
+        <input type="checkbox" id="editDisabled" style="width:auto" /> 停用该账号（不参与提交与同步）
+      </label>
+
+      <div class="foot" style="margin-top:16px">
+        <button id="editCancel" class="ghost">取消</button>
+        <button id="editSave" class="primary">保存修改</button>
+      </div>
     </div>
   </div>
 </div>
@@ -272,6 +326,7 @@ function renderAccounts() {
         <button data-op="sync">同步</button>
         <button data-op="login">授权</button>
         ${a.needsChallenge ? '<button data-op="challenge">验证</button>' : ""}
+        <button data-op="edit">编辑</button>
         <button data-op="toggle">${a.disabled ? "启用" : "停用"}</button>
         <button data-op="del" style="color:#c53030">删除</button>
       </div>`;
@@ -294,6 +349,7 @@ function renderAccounts() {
             } else toast("授权成功");
           }
           if (op === "challenge") { toast("已打开人机验证窗口，请在弹窗内完成…"); await api(`/api/accounts/${a.id}/challenge`, { method: "POST" }); toast("验证完成"); }
+          if (op === "edit") { openEdit(a.id); return; }
           if (op === "toggle") { await api(`/api/accounts/${a.id}/toggle`, { method: "POST", body: JSON.stringify({ disabled: !a.disabled }) }); }
           if (op === "del") {
             if (!confirm(`从账号池删除「${a.label}」？\n\n· 本地已下载的成片会保留\n· 浏览器 profile 默认保留（可重新授权）`)) { b.disabled = false; return; }
@@ -561,7 +617,7 @@ $("addCookieGo").onclick = async () => {
     if (!Array.isArray(cookies) || !cookies.length) throw new Error("请粘贴 cookie 数组");
   } catch (e) { return toast("Cookie JSON 解析失败：" + e.message, true); }
   try {
-    const id = await createAccount($("addLabel2").value, "chrome", btn, "导入中…");
+    const id = await createAccount($("addLabel2").value, "ego", btn, "导入中…");
     btn.disabled = true; btn.textContent = "校验中…";
     const out = await api(`/api/accounts/${id}/cookies`, { method: "POST", body: JSON.stringify({ cookies }) });
     addModal.hidden = true; $("addCookies").value = ""; $("addLabel2").value = "";
@@ -585,6 +641,102 @@ $("addEgoGo").onclick = async () => {
     await refresh();
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; btn.textContent = "接管会话"; }
+};
+
+
+/* ---------- 编辑账号 ---------- */
+const editModal = $("editModal");
+let editingId = "";
+
+async function openEdit(id) {
+  try {
+    const d = await api(`/api/accounts/${id}/detail`);
+    editingId = id;
+    $("editLabel").value = d.label || "";
+    $("editBackend").value = d.backend || "ego";
+    $("editEmail").value = d.email || "";
+    $("editPwd").value = "";
+    $("editDisabled").checked = Boolean(d.disabled);
+    $("editCookies").value = "";
+    const list = (d.cookies || []).map((c) => `${c.name}(${c.len}B ${c.preview}${c.expires ? " exp " + new Date(c.expires * 1000).toLocaleDateString("zh-CN") : ""})`).join(" · ");
+    $("editCookieInfo").textContent = `${d.cookieCount} 条${list ? " · " + list : ""}`;
+    $("editStatus").innerHTML = `状态 <b>${d.status}</b> · 上游 <b>${d.upstreamUserId || "未绑定"}</b>${d.hasPassword ? " · 已存密码" : ""}`;
+    editModal.hidden = false;
+  } catch (e) { toast(e.message, true); }
+}
+$("editClose").onclick = () => { editModal.hidden = true; };
+$("editCancel").onclick = () => { editModal.hidden = true; };
+editModal.addEventListener("click", (e) => { if (e.target === editModal) editModal.hidden = true; });
+
+$("editSave").onclick = async () => {
+  const b = $("editSave");
+  b.disabled = true; b.textContent = "保存中…";
+  try {
+    await api(`/api/accounts/${editingId}/update`, {
+      method: "POST",
+      body: JSON.stringify({
+        label: $("editLabel").value,
+        backend: $("editBackend").value,
+        disabled: $("editDisabled").checked,
+      }),
+    });
+    editModal.hidden = true;
+    toast("已保存");
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+  finally { b.disabled = false; b.textContent = "保存修改"; }
+};
+
+$("editCookieGo").onclick = async () => {
+  const raw = $("editCookies").value.trim();
+  if (!raw) return toast("先把 cookie 数组粘进来", true);
+  let cookies;
+  try { cookies = JSON.parse(raw); } catch (e) { return toast("JSON 解析失败：" + e.message, true); }
+  const b = $("editCookieGo");
+  b.disabled = true; b.textContent = "校验中…";
+  try {
+    const out = await api(`/api/accounts/${editingId}/cookies`, { method: "POST", body: JSON.stringify({ cookies }) });
+    $("editCookies").value = "";
+    toast("cookie 已生效：" + (out.userId || ""));
+    await refresh();
+    await openEdit(editingId);
+  } catch (e) { toast(e.message, true); }
+  finally { b.disabled = false; b.textContent = "保存 Cookie 并校验"; }
+};
+
+$("editPwdGo").onclick = async () => {
+  const email = $("editEmail").value.trim();
+  const password = $("editPwd").value;
+  if (!email || !password) return toast("邮箱和密码都要填", true);
+  const b = $("editPwdGo");
+  b.disabled = true; b.textContent = "登录中…";
+  try {
+    const out = await api(`/api/accounts/${editingId}/login-password`, { method: "POST", body: JSON.stringify({ email, password }) });
+    $("editPwd").value = "";
+    toast("登录成功：" + out.userId);
+    await refresh();
+    await openEdit(editingId);
+  } catch (e) { toast(e.message, true); }
+  finally { b.disabled = false; b.textContent = "用密码登录"; }
+};
+
+/* ---------- 新增：邮箱密码 ---------- */
+$("addPwdGo").onclick = async () => {
+  const btn = $("addPwdGo");
+  const email = $("addEmail").value.trim();
+  const password = $("addPwd").value;
+  if (!email || !password) return toast("邮箱和密码都要填", true);
+  try {
+    const id = await createAccount($("addLabel4").value, "ego", btn, "创建中…");
+    btn.disabled = true; btn.textContent = "登录中…";
+    const out = await api(`/api/accounts/${id}/login-password`, { method: "POST", body: JSON.stringify({ email, password }) });
+    addModal.hidden = true;
+    $("addLabel4").value = ""; $("addEmail").value = ""; $("addPwd").value = "";
+    activeAccount = id; localStorage.setItem("fs.account", id);
+    toast("账号已接入：" + out.userId);
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = "登录并接入"; }
 };
 
 function connect() {
