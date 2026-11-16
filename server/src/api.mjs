@@ -191,6 +191,8 @@ export function startLogin(accountId) {
   if (loginInFlight.has(accountId)) return { ok: true, phase: "awaiting_user", reused: true };
   const task = loginAccount(accountId)
     .catch(async (e) => {
+      const acct = await getAccount(accountId).catch(() => null);
+      if (!acct || acct.status === "removed") return; // 已删除的槽位不要复活
       await upsertAccount({ id: accountId, lastError: e.message, status: "new" }).catch(() => {});
       emit("login", { accountId, phase: "error", message: e.message });
       await logEvent("login_failed", `[${accountId}] ${e.message}`, { accountId, code: e.code }).catch(() => {});

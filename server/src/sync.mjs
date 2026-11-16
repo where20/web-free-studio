@@ -162,7 +162,7 @@ export async function syncAll(opts = {}) {
   const accounts = await listAccounts();
   const out = [];
   for (const a of accounts) {
-    if (a.status === "new") continue;
+    if (a.status === "new" || a.status === "removed" || a.disabled) continue;
     out.push(await syncAccount(a, opts));
   }
   return out;
