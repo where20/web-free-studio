@@ -36,12 +36,21 @@ export function jsFetchExpr(apiPath, { method = "GET", headers = {}, body = null
     cache: "no-store",
   };
   if (body !== null && body !== undefined) opts.body = body;
+  // 页内 fetch 必须自带超时：网络卡住时 evaluate 会一直挂着，把整个账号车道拖死
   return `(async () => {
-    const r = await fetch(${JSON.stringify(apiPath)}, ${JSON.stringify(opts)});
-    const text = await r.text();
-    let json = null;
-    try { json = JSON.parse(text); } catch {}
-    return { status: r.status, json, text: text.length > 4000 ? text.slice(0, 4000) : text };
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 25000);
+    try {
+      const r = await fetch(${JSON.stringify(apiPath)}, { ...${JSON.stringify(opts)}, signal: ctl.signal });
+      const text = await r.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch {}
+      return { status: r.status, json, text: text.length > 4000 ? text.slice(0, 4000) : text };
+    } catch (e) {
+      return { status: 0, json: null, text: String(e && e.message || e), aborted: true };
+    } finally {
+      clearTimeout(timer);
+    }
   })()`;
 }
 
@@ -66,6 +75,15 @@ class BaseLane {
   async api(apiPath, opts = {}) {
     const payload = await this.exec(jsFetchExpr(apiPath, opts));
     if (!payload || typeof payload.status !== "number") throw new UpstreamError("上游响应异常");
+    if (payload.status === 0) {
+      // 页内请求超时/被中断：后台重置页面，下次调用换新标签页
+      this.resetPage?.().catch(() => {});
+      throw new UpstreamError(`上游请求超时（${payload.text || "no response"}）`, {
+        status: 0,
+        code: "timeout",
+        payload,
+      });
+    }
     const { status, json } = payload;
     if (status === 401) throw new AuthError(json?.error?.message);
     if (status === 403 && json?.error?.code === "challenge_required") {
@@ -141,9 +159,15 @@ class BaseLane {
     if (existed && existed.size > 0) bytes = existed.size;
     else {
       const cdn = task.video?.cdn_url;
-      bytes = cdn && cdn.startsWith(UPSTREAM.contentHost)
-        ? await downloadTo(cdn, out)
-        : await this.downloadViaLane(id, out);
+      try {
+        bytes = cdn && cdn.startsWith(UPSTREAM.contentHost)
+          ? await downloadTo(cdn, out)
+          : await this.downloadViaLane(id, out);
+      } catch (e) {
+        // CDN 直链失效时回落到带 Cookie 的 /content（302 到新的 CDN 地址）
+        if (cdn) bytes = await this.downloadViaLane(id, out);
+        else throw e;
+      }
     }
 
     let thumbBytes = 0;
@@ -158,7 +182,10 @@ class BaseLane {
   async downloadViaLane(id, out) {
     const payload = await this.exec(
       `(async () => {
-        const r = await fetch("/v1/videos/${id}/content", { credentials: "include" });
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 600000);
+        const r = await fetch("/v1/videos/${id}/content", { credentials: "include", signal: ctl.signal });
+        clearTimeout(timer);
         if (!r.ok) return { error: r.status };
         const buf = new Uint8Array(await r.arrayBuffer());
         const chunk = 0x8000;
@@ -166,7 +193,7 @@ class BaseLane {
         for (let i = 0; i < buf.length; i += chunk) s += String.fromCharCode.apply(null, buf.subarray(i, i + chunk));
         return { b64: btoa(s), type: r.headers.get("content-type") };
       })()`,
-      300_000,
+      620_000,
     );
     if (!payload?.b64) throw new UpstreamError("内容下载失败");
     const buf = Buffer.from(payload.b64, "base64");
@@ -213,9 +240,9 @@ export class ChromeLane extends BaseLane {
     throw new Error("页面未能进入 paba.tv 域");
   }
 
-  async exec(expr) {
+  async exec(expr, timeoutMs = 60_000) {
     const page = await this.ensurePage();
-    const res = await page.evaluate(expr, { timeoutMs: 300_000 });
+    const res = await page.evaluate(expr, { timeoutMs });
     return res?.result?.value ?? res?.value;
   }
 
@@ -258,32 +285,73 @@ export class EgoLane extends BaseLane {
     if (process.env.EGO_SERVER) args.push(`--ego-server-name=${process.env.EGO_SERVER}`);
     args.push("nodejs", "-e", script);
     return new Promise((resolve, reject) => {
-      execFile(
+      let child = null;
+      let settled = false;
+      const done = (fn, v) => {
+        if (settled) return;
+        settled = true;
+        fn(v);
+      };
+      // 硬超时：ego CLI 可能忽略 SIGTERM，必须自己兜一层 SIGKILL + reject
+      const hard = setTimeout(() => {
+        try {
+          child?.kill("SIGKILL");
+        } catch {}
+        done(reject, new Error(`ego 调用超时（${Math.round(timeoutMs / 1000)}s）`));
+      }, timeoutMs);
+      child = execFile(
         this.bin,
         args,
         { timeout: timeoutMs, maxBuffer: 512 * 1024 * 1024, env: process.env },
         (err, stdout, stderr) => {
+          clearTimeout(hard);
+          if (settled) return;
           const combined = `${stdout || ""}\n${stderr || ""}`;
           const line = combined
             .split("\n")
             .reverse()
             .find((l) => l.trimStart().startsWith("__FS__"));
           if (!line) {
-            return reject(
+            return done(
+              reject,
               new Error(`ego-browser 未返回结果：${(stderr || stdout || err?.message || "").slice(0, 400)}`),
             );
           }
           try {
-            resolve(JSON.parse(line.trimStart().slice("__FS__".length)));
+            done(resolve, JSON.parse(line.trimStart().slice("__FS__".length)));
           } catch {
-            reject(new Error("ego-browser 返回结果解析失败"));
+            done(reject, new Error("ego-browser 返回结果解析失败"));
           }
         },
       );
     });
   }
 
-  async exec(expr, timeoutMs = 300_000) {
+  /** 页面卡死/被关时，重建该账号的 tab，再重试一次 */
+  async resetPage() {
+    const script = `
+const SPACE = ${JSON.stringify(this.spaceName)};
+const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
+const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
+for (const p of await task.pages()) { try { await p.close(); } catch {} }
+const page = await task.newPage();
+await page.goto(${JSON.stringify(UPSTREAM.videoPage)}, { timeout: 45000 });
+console.log("__FS__" + JSON.stringify({ ok: true }));
+`;
+    return this.execRaw(script, 90_000);
+  }
+
+  async exec(expr, timeoutMs = 60_000) {
+    try {
+      return await this.execOnce(expr, timeoutMs);
+    } catch (e) {
+      // 页面忙/超时：后台重建标签页，本次直接失败，避免把车道拖成几分钟
+      this.resetPage?.().catch(() => {});
+      throw e;
+    }
+  }
+
+  async execOnce(expr, timeoutMs = 60_000) {
     const script = `
 const SPACE = ${JSON.stringify(this.spaceName)};
 const EXPR = ${JSON.stringify(expr)};
@@ -324,7 +392,7 @@ console.log("__FS__" + JSON.stringify({ ok }));
 }
 
 async function downloadTo(url, out) {
-  const res = await fetch(url, { redirect: "follow" });
+  const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(600_000) });
   if (!res.ok) throw new UpstreamError(`下载失败 ${res.status}`, { status: res.status });
   const buf = Buffer.from(await res.arrayBuffer());
   const tmp = `${out}.part`;

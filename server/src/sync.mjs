@@ -45,13 +45,92 @@ function normalizeField(t) {
   };
 }
 
+// 同一时刻只允许一个同步在跑：ego/Chrome 的同一标签页被两个进程并发操作会互相卡死
+let syncLock = Promise.resolve();
+function withSyncLock(fn) {
+  // 兜底看门狗：单次同步超过 150s 直接判失败，避免一个卡住的调用把后续同步全堵死
+  const run = () =>
+    Promise.race([
+      Promise.resolve().then(fn),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("同步超时（150s）")), 150_000)),
+    ]);
+  const next = syncLock.then(run, run);
+  syncLock = next.catch(() => {});
+  return next;
+}
+
+/* ---------- 资产镜像后台队列（不阻塞同步；免费档 CDN 有时只有几 KB/s） ---------- */
+const mirrorQueue = [];
+const mirrorPending = new Set();
+let mirrorRunning = 0;
+const MIRROR_CONCURRENCY = 1;
+
+function enqueueMirror(account, task, row, prev) {
+  const key = `${account.id}:${row.upstreamId}`;
+  if (mirrorPending.has(key)) return false;
+  mirrorPending.add(key);
+  mirrorQueue.push({ account, task, row, prev });
+  pumpMirror();
+  return true;
+}
+
+function pumpMirror() {
+  while (mirrorRunning < MIRROR_CONCURRENCY && mirrorQueue.length) {
+    const job = mirrorQueue.shift();
+    mirrorRunning += 1;
+    runMirror(job).finally(() => {
+      mirrorRunning -= 1;
+      mirrorPending.delete(`${job.account.id}:${job.row.upstreamId}`);
+      pumpMirror();
+    });
+  }
+}
+
+async function runMirror({ account, task, row, prev }) {
+  try {
+    const asset = await laneFor(account).mirror(task);
+    await upsertTask({
+      ...row,
+      asset: { video: asset.video, thumb: asset.thumb, meta: asset.meta, bytes: asset.bytes, savedAt: Date.now() },
+      assetAttempts: 0,
+      assetError: null,
+      assetSkipUntil: 0,
+    });
+    await logEvent("mirror_ok", `${row.upstreamId} 已落本地 ${(asset.bytes / 1048576).toFixed(1)}MB`, {
+      accountId: account.id,
+    });
+    emit("asset", {
+      accountId: account.id,
+      upstreamId: row.upstreamId,
+      bytes: asset.bytes,
+      video: `/assets/${asset.video.split("/assets/")[1]}`,
+    });
+  } catch (e) {
+    const attempts = ((prev && prev.assetAttempts) || 0) + 1;
+    await upsertTask({
+      ...row,
+      assetAttempts: attempts,
+      assetError: e.message,
+      assetSkipUntil: attempts >= 3 ? Date.now() + 30 * 60 * 1000 : 0,
+    });
+    await logEvent("mirror_failed", `${row.upstreamId} 镜像失败（第 ${attempts} 次）：${e.message}`, {
+      accountId: account.id,
+    });
+  }
+}
+
 /** 单账号一批同步：拉列表 → 落库 → 镜像已完成资产 */
-export async function syncAccount(account, { limit = RUNTIME.listLimit, mirror = true, maxMirror } = {}) {
+export function syncAccount(account, opts = {}) {
+  return withSyncLock(() => syncAccountInner(account, opts));
+}
+
+async function syncAccountInner(account, { limit = RUNTIME.listLimit, mirror = true, maxMirror } = {}) {
   const lane = laneFor(account);
   const started = Date.now();
   let synced = 0;
-  let downloaded = 0;
-  let mirroredBytes = 0;
+  let queued = 0;
+  const downloaded = 0;
+  const mirroredBytes = 0;
 
   try {
     const me = await lane.me();
@@ -80,33 +159,10 @@ export async function syncAccount(account, { limit = RUNTIME.listLimit, mirror =
       await upsertTask(row);
       synced += 1;
 
-      if (mirror && base.status === "done" && base.video && !row.asset?.video) {
-        if (downloaded >= (maxMirror ?? RUNTIME.mirrorPerSync)) continue;
-        try {
-          const asset = await lane.mirror(t);
-          await upsertTask({
-            ...row,
-            asset: {
-              video: asset.video,
-              thumb: asset.thumb,
-              meta: asset.meta,
-              bytes: asset.bytes,
-              savedAt: Date.now(),
-            },
-          });
-          downloaded += 1;
-          mirroredBytes += asset.bytes || 0;
-          emit("asset", {
-            accountId: account.id,
-            upstreamId: base.upstreamId,
-            bytes: asset.bytes,
-            video: `/assets/${asset.video.split("/assets/")[1]}`,
-          });
-        } catch (e) {
-          await logEvent("mirror_failed", `${base.upstreamId} 镜像失败：${e.message}`, {
-            accountId: account.id,
-          });
-        }
+      const skipMirror =
+        (prev?.assetAttempts || 0) >= 3 && (prev?.assetSkipUntil || 0) > Date.now();
+      if (mirror && base.status === "done" && base.video && !row.asset?.video && !skipMirror) {
+        if (enqueueMirror(account, t, row, prev)) queued += 1;
       }
     }
 
@@ -133,6 +189,7 @@ export async function syncAccount(account, { limit = RUNTIME.listLimit, mirror =
     emit("sync", {
       accountId: account.id,
       synced,
+      queued,
       downloaded,
       mirroredBytes,
       freeUsedToday: freeToday,

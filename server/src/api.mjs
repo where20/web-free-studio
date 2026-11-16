@@ -1,9 +1,10 @@
 import http from "node:http";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import fssync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUNTIME, WEB_DIR, ASSET_DIR, UPSTREAM, FREE_MODELS } from "./config.mjs";
+import { RUNTIME, WEB_DIR, ASSET_DIR, UPSTREAM, FREE_MODELS, PROFILE_DIR } from "./config.mjs";
 import {
   snapshot,
   listAccounts,
@@ -20,7 +21,7 @@ import {
 } from "./store.mjs";
 import { laneFor, AuthError, ChallengeError } from "./lane.mjs";
 import { precheck, enqueue, waitJob, pickAccountId, queueStats, getJob } from "./queue.mjs";
-import { getBrowser } from "./chrome.mjs";
+import { getBrowser, stopBrowser } from "./chrome.mjs";
 import { syncAccount, syncAll } from "./sync.mjs";
 import { addClient, emit } from "./events.mjs";
 import { Page, sleep } from "./cdp.mjs";
@@ -150,16 +151,39 @@ export async function loginAccount(accountId, { timeoutMs = 300_000 } = {}) {
   const account = await getAccount(accountId);
   if (!account) throw new Error(`账号不存在：${accountId}`);
   const browser = await ensureBrowser(accountId, { headless: false });
-  const page = await Page.open(browser.port, UPSTREAM.loginPage);
+  const page = await Page.open(browser.port, "about:blank");
+  try {
+    await page.goto(UPSTREAM.loginPage, { timeoutMs: 45_000 });
+  } catch (e) {
+    throw Object.assign(new Error(`登录页没能加载：${e.message}`), { code: "chrome_unavailable" });
+  }
+  // 把窗口拎到前台，否则用户看不到"打开了"
+  await page.send("Page.bringToFront").catch(() => {});
+  if (process.platform === "darwin") {
+    try {
+      spawn("open", ["-a", "Google Chrome"], { stdio: "ignore", detached: true }).unref();
+    } catch {}
+  }
   await logEvent("login_wait", `[${account.label}] 已打开登录页，等待人工授权…`, { accountId });
   emit("login", { accountId, phase: "awaiting_user" });
 
+  let deadStrikes = 0;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const r = await page
       .evaluate(`fetch('/auth/me',{credentials:'include'}).then(r=>r.json()).catch(()=>({}))`)
       .catch(() => null);
     const v = r?.result?.value ?? r?.value;
+    if (!v) {
+      deadStrikes += 1;
+      if (page.closed || deadStrikes >= 4) {
+        throw Object.assign(new Error("登录窗口已关闭或浏览器被系统结束，授权中断"), {
+          code: "chrome_unavailable",
+        });
+      }
+    } else {
+      deadStrikes = 0;
+    }
     if (v && v.ok) {
       await upsertAccount({
         id: accountId,
@@ -344,6 +368,22 @@ export function createServer() {
 
       if (p === "/api/queue") return json(res, 200, queueStats());
 
+      // 兜底：用系统默认浏览器打开登录页（受控 Chrome 起不来时，人工登录 + 导出 Cookie）
+      if (p === "/api/open-site") {
+        const target = url.searchParams.get("url") || UPSTREAM.loginPage;
+        if (!target.startsWith("https://www.paba.tv")) {
+          return json(res, 400, { error: "只允许打开 paba.tv" });
+        }
+        const cmd =
+          process.platform === "darwin" ? ["open", [target]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", target]] : ["xdg-open", [target]];
+        try {
+          spawn(cmd[0], cmd[1], { stdio: "ignore", detached: true }).unref();
+          return json(res, 200, { ok: true, opened: target });
+        } catch (e) {
+          return json(res, 500, { error: `打开失败：${e.message}` });
+        }
+      }
+
       const jobMatch = p.match(/^\/api\/jobs\/([^/]+)$/);
       if (jobMatch) {
         const job = getJob(jobMatch[1]);
@@ -403,8 +443,22 @@ export function createServer() {
           return json(res, 200, await seedCookies(id, body.cookies));
         }
         if (action === "delete" && req.method === "POST") {
-          await upsertAccount({ id, status: "removed" });
-          return json(res, 200, { ok: true });
+          const body = await readBody(req).catch(() => ({}));
+          const acct = await getAccount(id);
+          if (!acct) throw new Error("账号不存在");
+          await stopBrowser(id).catch(() => {});
+          await upsertAccount({ id, status: "removed", removedAt: Date.now(), disabled: true });
+          let purged = false;
+          if (body.purge) {
+            await fs.rm(path.join(PROFILE_DIR, id), { recursive: true, force: true }).catch(() => {});
+            purged = true;
+          }
+          await logEvent(
+            "account_removed",
+            `已删除账号 ${acct.label}${purged ? "（含浏览器 profile）" : "（保留 profile，可重新授权）"}`,
+            { accountId: id },
+          );
+          return json(res, 200, { ok: true, purged });
         }
       }
 
@@ -471,6 +525,15 @@ export function createServer() {
 export async function startServer() {
   await pruneTasks();
   const server = createServer();
-  await new Promise((resolve) => server.listen(RUNTIME.port, resolve));
+  await new Promise((resolve, reject) => {
+    server.once("error", (e) => {
+      if (e.code === "EADDRINUSE") {
+        reject(new Error(`端口 ${RUNTIME.port} 已被占用：可能已有实例在跑（多实例会互相覆盖本地库，必须先停旧的）`));
+        return;
+      }
+      reject(e);
+    });
+    server.listen(RUNTIME.port, resolve);
+  });
   return server;
 }

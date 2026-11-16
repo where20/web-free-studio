@@ -194,7 +194,10 @@
       <div class="steps" style="margin-top:8px">
         从已登录的浏览器 DevTools → Application → Cookies 复制，导入后立即校验 <code>/auth/me</code>。
       </div>
-      <div class="foot"><button id="addCookieGo" class="primary">导入并校验</button></div>
+      <div class="foot">
+        <button id="openLoginPage" class="ghost">打开登录页</button>
+        <button id="addCookieGo" class="primary">导入并校验</button>
+      </div>
     </div>
     <div class="pane" data-pane="ego" hidden>
       <label class="f" style="margin-top:0">账号备注</label>
@@ -226,7 +229,11 @@ function toast(msg, err = false) {
 async function api(path, opts) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(body.error || `HTTP ${res.status}`);
+    err.code = body.code || "error";
+    throw err;
+  }
   return body;
 }
 
@@ -266,6 +273,7 @@ function renderAccounts() {
         <button data-op="login">授权</button>
         ${a.needsChallenge ? '<button data-op="challenge">验证</button>' : ""}
         <button data-op="toggle">${a.disabled ? "启用" : "停用"}</button>
+        <button data-op="del" style="color:#c53030">删除</button>
       </div>`;
     item.querySelectorAll("button").forEach((b) => {
       b.onclick = async (e) => {
@@ -279,11 +287,20 @@ function renderAccounts() {
             await api(`/api/accounts/${a.id}/login`, { method: "POST" });
             toast("已打开登录窗口，请完成授权…");
             await refresh();
-            const done = await waitOnline(a.id);
-            toast(done ? "授权成功" : "登录未完成", !done);
+            const done = await waitOnline(a.id, 120000);
+            if (!done) {
+              toast("登录未完成：受控 Chrome 可能起不来，试试「导入 Cookie」", true);
+              addModal.hidden = false; switchTab("cookie");
+            } else toast("授权成功");
           }
           if (op === "challenge") { toast("已打开人机验证窗口，请在弹窗内完成…"); await api(`/api/accounts/${a.id}/challenge`, { method: "POST" }); toast("验证完成"); }
           if (op === "toggle") { await api(`/api/accounts/${a.id}/toggle`, { method: "POST", body: JSON.stringify({ disabled: !a.disabled }) }); }
+          if (op === "del") {
+            if (!confirm(`从账号池删除「${a.label}」？\n\n· 本地已下载的成片会保留\n· 浏览器 profile 默认保留（可重新授权）`)) { b.disabled = false; return; }
+            await api(`/api/accounts/${a.id}/delete`, { method: "POST", body: JSON.stringify({ purge: false }) });
+            if (activeAccount === a.id) { activeAccount = ""; localStorage.removeItem("fs.account"); }
+            toast("已删除账号 " + a.label);
+          }
           await refresh();
         } catch (err) { toast(err.message, true); }
         finally { b.disabled = false; }
@@ -487,13 +504,12 @@ $("btnAddTop").onclick = openAdd;
 $("btnAddAcct").onclick = openAdd;
 $("addClose").onclick = () => { addModal.hidden = true; };
 addModal.addEventListener("click", (e) => { if (e.target === addModal) addModal.hidden = true; });
+function switchTab(name) {
+  document.querySelectorAll(".sheet .tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === name));
+  document.querySelectorAll(".sheet .pane").forEach((pane) => { pane.hidden = pane.dataset.pane !== name; });
+}
 document.querySelectorAll(".sheet .tabs button").forEach((b) => {
-  b.onclick = () => {
-    document.querySelectorAll(".sheet .tabs button").forEach((x) => x.classList.toggle("on", x === b));
-    document.querySelectorAll(".sheet .pane").forEach((pane) => {
-      pane.hidden = pane.dataset.pane !== b.dataset.tab;
-    });
-  };
+  b.onclick = () => switchTab(b.dataset.tab);
 });
 
 async function createAccount(label, backend, btn, busyText) {
@@ -523,10 +539,18 @@ $("addBrowserGo").onclick = async () => {
     toast(a ? "账号已接入：" + (a.upstreamUserId || a.label) : "登录未完成，可稍后在账号池点「授权」继续", !a);
   } catch (e) {
     toast(e.message, true);
-    if (/Chrome 起不来|chrome_unavailable/.test(e.message)) {
-      toast("改用「导入 Cookie」标签页，或在本机终端运行 npm run account", true);
+    if (e.code === "chrome_unavailable" || /Chrome 起不来/.test(e.message)) {
+      addModal.hidden = false;
+      switchTab("cookie");
+      toast("受控 Chrome 起不来，改用「导入 Cookie」；也可点下面「打开登录页」用系统浏览器登录", true);
     }
   } finally { btn.disabled = false; btn.textContent = "打开登录窗口"; }
+};
+
+$("openLoginPage").onclick = async () => {
+  try { await api("/api/open-site", { method: "POST" }); }
+  catch (e) { toast(e.message, true); return; }
+  toast("已用系统浏览器打开 paba.tv，登录后按 F12 → Application → Cookies 复制 h3v / h3s / __Host-h3d");
 };
 
 $("addCookieGo").onclick = async () => {
