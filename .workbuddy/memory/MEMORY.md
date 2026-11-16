@@ -42,6 +42,12 @@
 - 沙箱内 spawn Chrome 必崩，只能用 EgoLane；ego `console.log` 走 stderr。
 - 长下载/大文件请求会被沙箱 SIGTERM（exit 137）→ 放后台任务跑。
 - 本机 `http_proxy=127.0.0.1:61575` 会干扰 curl localhost → 用 `--noproxy '*'`。
+- **ego `page.evaluate` 有 15s 硬上限**（`setDefaultTimeout` 改不掉，实测 20s 睡眠照样被掐）；
+  字符串表达式**不接受第二参数**（传 options 直接 `TypeError: string expression does not accept an argument`）。
+  长页内操作只能：后台启动（fire-and-forget 存 window）→ 轮询 → 分片读取。
+- **paba `/content` 在 CDN 直链过期后直接 200 返回本体**（不再 302）→ 镜像走 `downloadInPage`
+  分片兜底（`lane.mjs`，commit 9f4a403）；同步必须保留 `assetAttempts/assetError/assetSkipUntil`
+  否则退避失效、死链任务占死镜像队列（commit 4957dfd）。
 - 同 repo 有并行会话开发过（17:45 参考素材功能），改文件前先看 `git status` + mtime，小步提交。
 - **launchctl bootstrap 与 crontab 都被沙箱禁用**（连最小 plist 都报 `Input/output error`）→ 做不了开机自启。
   解法：daemon 由 MCP 适配层**按需自动拉起**（spawn + 轮询探测 ≤15s + 端口占用复用）。
@@ -74,7 +80,9 @@
 - daemon 在 `:8790` 运行（由适配层按需拉起）；Veda 剩 15/20 credit，明日 15:17 恢复（+24h 滚动窗口）。
 - 7 个 paba 账号、7 条任务（含本次 MCP 验证提交的 veda 任务 `j_01M7HYD7HTDP3X2S05SEY8DTW0`）。
 - MCP 已配：`~/.workbuddy/mcp.json` + `~/.codex/config.toml`（WorkBuddy 需用户点「信任」）。
-- git：`034c917` docs → `00b72e6` 凭证清理 → `d506cae` Veda+参考素材 → `a97abd6` **MCP 适配层**。
+- git：`034c917` docs → `00b72e6` 凭证清理 → `d506cae` Veda+参考素材 → `a97abd6` MCP 适配层
+  → `4957dfd`/`62d401c`/`9f4a403` **镜像链路修复**（同步保留退避字段 + ego 15s 绕行双路径 + 首试限时）。
 - 待办：WorkBuddy 侧点「信任」；`where20/npxgh-test` 临时仓库待删（需 delete_repo scope）；
-  db.json 里 `6625`/`5537` 疑似重复账号记录待查；真机 ChromeLane 多账号联调；
-  参考图 >2MB 上传实测；Veda unlock key 申请；「额度恢复自动排产」定时任务（用户未拍板）。
+  ~~db 重复账号待查~~（已确认 6625/5537 是 `removed` 状态的正常删除记录，非脏数据）；
+  真机 ChromeLane 多账号联调；参考图 >2MB 上传实测；Veda unlock key 申请；
+  「额度恢复自动排产」定时任务（用户未拍板）；旧任务 `h3_e8b807c8…` 镜像在退避重试中自愈。

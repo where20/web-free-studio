@@ -3,7 +3,7 @@
 > **REA** = Requirements · Extract · Assemble（需求 · 提取 · 装配）
 > 目标：把 `www.paba.tv/#video` 的视频生成能力，落成一套**在本机跑、账号可多开、产物自动回本地**的服务。
 > 分析日期：2026-11-16 · 目标环境：macOS / Node 22 · 分析方式：运行时抓包 + 前端 bundle 逆向 + 真实请求验证（非静态猜测）
-> 分析对象：`https://www.paba.tv`（自有账号 `s2a:3976`，并非第三方公开 API）
+> 分析对象：`https://www.paba.tv`（自有账号 `s2a:xxxx`，并非第三方公开 API）
 
 ---
 
@@ -284,7 +284,7 @@ POST /v1/videos/generations
 | 步骤 | 结果 |
 |------|------|
 | `doctor` 自检 | ✅ Node 22 / Chrome / 上游 200 |
-| 账号接管（ego 会话） | ✅ `user_id=s2a:3976`，同步 2 条记录 |
+| 账号接管（ego 会话） | ✅ `user_id=s2a:xxxx`，同步 2 条记录 |
 | 资产镜像 | ✅ `data/assets/2026-11-12/h3_fe766…mp4` **11.3 MB** + 缩略图 + 旁车 JSON |
 | 通过服务提交 | ✅ 返回 `h3_91b7189c…`，`billing {cost:0, free:true}` |
 | 工作台渲染 | ✅ 见 `.analysis/docs/ui-工作台.png`（账号池 / 队列条 / 额度条 / 记录网格 / 日志） |
