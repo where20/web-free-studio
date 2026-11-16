@@ -86,7 +86,7 @@
   .quota .track i.full{background:linear-gradient(90deg,#e05757,#f08a8a)}
   .modal{position:fixed;inset:0;background:rgba(16,24,40,.42);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px}
   .modal[hidden]{display:none}
-  .sheet{background:#fff;border-radius:16px;max-width:540px;width:100%;box-shadow:0 24px 60px rgba(16,24,40,.22);overflow:hidden}
+  .sheet{background:#fff;border-radius:16px;max-width:540px;width:100%;max-height:88vh;overflow:auto;box-shadow:0 24px 60px rgba(16,24,40,.22)}
   .sheet h4{margin:0;padding:16px 18px 12px;font-size:15px;display:flex;align-items:center}
   .sheet h4 button{margin-left:auto;border:0;background:transparent;font-size:18px;line-height:1;padding:0 4px;cursor:pointer;color:var(--sub)}
   .sheet .tabs{display:flex;padding:0 18px;border-bottom:1px solid var(--line)}
@@ -560,11 +560,13 @@ $("btnAddTop").onclick = openAdd;
 $("btnAddAcct").onclick = openAdd;
 $("addClose").onclick = () => { addModal.hidden = true; };
 addModal.addEventListener("click", (e) => { if (e.target === addModal) addModal.hidden = true; });
+// 注意：只作用于「新增账号」弹窗，别把「编辑账号」的 pane 一起隐藏了（曾经踩过）
 function switchTab(name) {
-  document.querySelectorAll(".sheet .tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === name));
-  document.querySelectorAll(".sheet .pane").forEach((pane) => { pane.hidden = pane.dataset.pane !== name; });
+  const m = document.getElementById("addModal");
+  m.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === name));
+  m.querySelectorAll(".pane").forEach((pane) => { pane.hidden = pane.dataset.pane !== name; });
 }
-document.querySelectorAll(".sheet .tabs button").forEach((b) => {
+document.querySelectorAll("#addModal .tabs button").forEach((b) => {
   b.onclick = () => switchTab(b.dataset.tab);
 });
 

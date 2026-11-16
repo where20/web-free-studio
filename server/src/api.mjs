@@ -467,11 +467,16 @@ export function createServer() {
 
       if (p === "/api/accounts" && req.method === "POST") {
         const body = await readBody(req);
+        const label = String(body.label || "").trim();
+        if (!label) throw Object.assign(new Error("账号备注不能为空"), { code: "validation" });
+        if (/^\d{1,6}$/.test(label) && !body.id) {
+          throw Object.assign(new Error(`备注「${label}」看起来是误填，换个能认出来的名字`), { code: "validation" });
+        }
         const id = (body.id || `acct-${Date.now().toString(36)}`).replace(/[^\w-]/g, "");
         const backend = body.backend || process.env.LANE || "chrome";
         const account = await upsertAccount({
           id,
-          label: body.label || id,
+          label,
           status: "new",
           headless: true,
           backend,
