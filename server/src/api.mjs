@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import fssync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUNTIME, WEB_DIR, ASSET_DIR, UPSTREAM } from "./config.mjs";
+import { RUNTIME, WEB_DIR, ASSET_DIR, UPSTREAM, FREE_MODELS } from "./config.mjs";
 import {
   snapshot,
   listAccounts,
@@ -13,8 +13,13 @@ import {
   listTasks,
   logEvent,
   pruneTasks,
+  getUsage,
+  consumedOf,
+  countActive,
+  dayKey,
 } from "./store.mjs";
 import { laneFor, AuthError, ChallengeError } from "./lane.mjs";
+import { precheck, enqueue, waitJob, pickAccountId, queueStats, getJob } from "./queue.mjs";
 import { getBrowser } from "./chrome.mjs";
 import { syncAccount, syncAll } from "./sync.mjs";
 import { addClient, emit } from "./events.mjs";
@@ -78,19 +83,6 @@ function accountView(a) {
   return rest;
 }
 
-async function pickAccount(requestedId) {
-  const accounts = await listAccounts();
-  if (requestedId) {
-    const hit = accounts.find((a) => a.id === requestedId);
-    if (!hit) throw new Error(`账号不存在：${requestedId}`);
-    return hit;
-  }
-  const usable = accounts.filter((a) => a.status === "online");
-  if (!usable.length) throw new Error("没有可用账号，请先授权（npm run account）");
-  usable.sort((a, b) => (a.freeUsedToday || 0) - (b.freeUsedToday || 0));
-  return usable[0];
-}
-
 export function buildVideoPayload(input) {
   const body = {
     channel_id: input.channelId || "",
@@ -112,36 +104,23 @@ export function buildVideoPayload(input) {
   return body;
 }
 
+/**
+ * 提交入口：统一走提交队列（默认等待结果，便于 CLI 直接拿 upstreamId）。
+ * 传 { async: true } 立刻返回 jobId，由 SSE/轮询跟进。
+ */
 export async function generate(input) {
-  if (!input.prompt || !String(input.prompt).trim()) throw new Error("prompt 不能为空");
-  const account = await pickAccount(input.accountId);
-  const lane = laneFor(account);
   const payload = buildVideoPayload(input);
-  const upstream = await lane.createVideo(payload);
-  const upstreamId = upstream.request_id || upstream.id;
-  const row = {
-    accountId: account.id,
-    upstreamId,
-    status: upstream.status || "pending",
-    queueState: upstream.queue_state,
-    model: upstream.model || payload.model,
-    tier: upstream.tier,
-    tierCn: upstream.tier_cn,
-    prompt: payload.prompt,
-    duration: payload.duration,
-    resolution: payload.resolution,
-    aspectRatio: payload.aspect_ratio,
-    seed: upstream.seed,
-    billing: upstream.billing || null,
-    upstreamCreatedAt: (upstream.created_at || Date.now() / 1000) * 1000,
-    submittedLocally: true,
-  };
-  await upsertTask(row);
-  await logEvent("submitted", `[${account.label}] ${upstreamId} ${payload.model} ${payload.duration}s`, {
-    accountId: account.id,
-  });
-  emit("task", { accountId: account.id, upstreamId, status: row.status });
-  return { accountId: account.id, upstreamId, raw: upstream };
+  const accountId = input.accountId || (await pickAccountId());
+  await precheck({ accountId, payload });
+  const { jobId, deduped } = await enqueue({ accountId, payload, label: input.label || "" });
+  if (input.async) return { jobId, accountId, deduped, status: "queued" };
+  const job = await waitJob(jobId);
+  if (!job) throw new Error("任务不存在");
+  if (job.status === "failed") {
+    throw Object.assign(new Error(job.error || "提交失败"), { code: job.code || "error" });
+  }
+  if (job.status !== "submitted") throw new Error("提交超时，任务仍在队列中");
+  return { jobId, accountId, upstreamId: job.upstreamId, deduped, status: "submitted" };
 }
 
 export async function loginAccount(accountId, { timeoutMs = 300_000 } = {}) {
@@ -283,13 +262,53 @@ export function createServer() {
 
       if (p === "/api/state") {
         const db = await snapshot();
+        const accounts = [];
+        for (const a of db.accounts) {
+          const usage = await getUsage(a.id);
+          accounts.push({
+            ...accountView(a),
+            usage: {
+              day: usage.day,
+              consumed: consumedOf(usage),
+              limit: RUNTIME.freeDailyLimit,
+              left: Math.max(0, RUNTIME.freeDailyLimit - consumedOf(usage)),
+              submitted: usage.submitted,
+              failed: usage.failed,
+              refunded: usage.refunded,
+            },
+            active: await countActive(a.id),
+          });
+        }
         return json(res, 200, {
-          accounts: db.accounts.map(accountView),
+          accounts,
           tasks: await listTasks({ limit: 300 }),
           log: db.log.slice(0, 120),
+          queue: queueStats(),
+          models: Object.values(FREE_MODELS).map((m) => ({
+            id: m.id,
+            label: m.label,
+            note: m.note,
+            maxDuration: m.maxDuration,
+          })),
+          limits: {
+            freeDailyLimit: RUNTIME.freeDailyLimit,
+            maxActivePerAccount: RUNTIME.maxActivePerAccount,
+            submitConcurrency: RUNTIME.submitConcurrency,
+            minSubmitIntervalMs: RUNTIME.minSubmitIntervalMs,
+          },
           runtime: { headless: RUNTIME.headless, syncIntervalMs: RUNTIME.syncIntervalMs },
           upstream: UPSTREAM.origin,
+          siteEntry: UPSTREAM.videoPage,
         });
+      }
+
+      if (p === "/api/queue") return json(res, 200, queueStats());
+
+      const jobMatch = p.match(/^\/api\/jobs\/([^/]+)$/);
+      if (jobMatch) {
+        const job = getJob(jobMatch[1]);
+        if (!job) return json(res, 404, { error: "job 不存在" });
+        return json(res, 200, job);
       }
 
       if (p === "/api/accounts" && req.method === "POST") {
@@ -300,16 +319,30 @@ export function createServer() {
           label: body.label || id,
           status: "new",
           headless: true,
+          backend: body.backend || process.env.LANE || "chrome",
         });
+        await logEvent("account_added", `新增账号槽位 ${id}`, { accountId: id });
+        if (body.login) {
+          const out = await loginAccount(id);
+          return json(res, 200, { account: accountView(await getAccount(id)), login: out });
+        }
         return json(res, 200, accountView(account));
       }
 
-      const acctMatch = p.match(/^\/api\/accounts\/([^/]+)\/(login|sync|challenge|delete|cookies)$/);
+      const acctMatch = p.match(/^\/api\/accounts\/([^/]+)\/(login|sync|challenge|delete|cookies|toggle)$/);
       if (acctMatch) {
         const [, id, action] = acctMatch;
         if (action === "login") return json(res, 200, await loginAccount(id));
         if (action === "sync") return json(res, 200, await syncOne(id));
         if (action === "challenge") return json(res, 200, await solveChallengeFor(id));
+        if (action === "toggle" && req.method === "POST") {
+          const body = await readBody(req);
+          const a = await getAccount(id);
+          if (!a) throw new Error("账号不存在");
+          const next = await upsertAccount({ id, disabled: Boolean(body.disabled) });
+          await logEvent("account_toggled", `${a.label} ${next.disabled ? "已停用" : "已启用"}`, { accountId: id });
+          return json(res, 200, accountView(next));
+        }
         if (action === "cookies" && req.method === "POST") {
           const body = await readBody(req);
           return json(res, 200, await seedCookies(id, body.cookies));
@@ -362,7 +395,16 @@ export function createServer() {
 
       return json(res, 404, { error: "not found" });
     } catch (e) {
-      const code = e instanceof AuthError ? 401 : e instanceof ChallengeError ? 428 : 500;
+      const code =
+        e instanceof AuthError
+          ? 401
+          : e instanceof ChallengeError
+            ? 428
+            : e.code === "validation"
+              ? 400
+              : e.code === "too_many_pending"
+                ? 409
+                : 500;
       return json(res, code, { error: e.message, code: e.code || "error" });
     }
   });

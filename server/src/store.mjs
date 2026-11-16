@@ -7,6 +7,7 @@ const EMPTY = {
   createdAt: null,
   accounts: [],
   tasks: [],
+  usage: {},
   log: [],
 };
 
@@ -134,4 +135,76 @@ export async function pruneTasks() {
   return update((db) => {
     db.tasks = db.tasks.slice(0, 4000);
   });
+}
+
+/* ---------- 每日免费额度账本（按「消耗次数」计） ---------- */
+
+export function dayKey(ts = Date.now()) {
+  const d = new Date(ts);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+function usageKey(accountId, day = dayKey()) {
+  return `${accountId}:${day}`;
+}
+
+function blankUsage(accountId, day) {
+  return { accountId, day, submitted: 0, failed: 0, refunded: 0, updatedAt: Date.now() };
+}
+
+/** 消耗次数 = 已提交成功 - 已退还 */
+export function consumedOf(row) {
+  if (!row) return 0;
+  return Math.max(0, (row.submitted || 0) - (row.refunded || 0));
+}
+
+export async function getUsage(accountId, day = dayKey()) {
+  const db = await load();
+  return db.usage[usageKey(accountId, day)] || blankUsage(accountId, day);
+}
+
+export async function listUsage(day = dayKey()) {
+  const db = await load();
+  return Object.values(db.usage).filter((u) => u.day === day);
+}
+
+/**
+ * 记一笔额度变化。
+ * kind: "reserve" 预扣（提交前）/ "refund" 退还（提交失败）/ "fail" 仅记失败次数
+ */
+export async function bumpUsage(accountId, kind, day = dayKey()) {
+  return update((db) => {
+    const key = usageKey(accountId, day);
+    const row = (db.usage[key] ||= blankUsage(accountId, day));
+    if (kind === "reserve") row.submitted += 1;
+    if (kind === "refund") row.refunded += 1;
+    if (kind === "fail") row.failed += 1;
+    row.updatedAt = Date.now();
+    return { ...row, consumed: consumedOf(row) };
+  });
+}
+
+/** 用户在上游页面手动提交过任务时，用上游当日免费条数校准本地账本（只上调，不下调） */
+export async function reconcileUsage(accountId, upstreamFreeCount, day = dayKey()) {
+  return update((db) => {
+    const key = usageKey(accountId, day);
+    const row = (db.usage[key] ||= blankUsage(accountId, day));
+    if (upstreamFreeCount > consumedOf(row)) {
+      row.submitted = upstreamFreeCount + (row.refunded || 0);
+      row.reconciledAt = Date.now();
+      row.updatedAt = Date.now();
+    }
+    return { ...row, consumed: consumedOf(row) };
+  });
+}
+
+/** 该账号当前在途任务数（排队/生成中），用于限制并发提交 */export async function countActive(accountId) {
+  const db = await load();
+  return db.tasks.filter(
+    (t) =>
+      t.accountId === accountId &&
+      ["pending", "queued", "running", "submitting"].includes(t.status),
+  ).length;
 }

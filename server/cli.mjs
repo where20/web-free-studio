@@ -2,7 +2,7 @@
 import process from "node:process";
 import fs from "node:fs/promises";
 import { chromePath, RUNTIME, DATA_DIR, ASSET_DIR } from "./src/config.mjs";
-import { listAccounts, upsertAccount, logEvent, load } from "./src/store.mjs";
+import { listAccounts, upsertAccount, logEvent, load, getUsage } from "./src/store.mjs";
 import { loginAccount, syncOne, solveChallengeFor, generate, startServer, seedCookies } from "./src/api.mjs";
 import { startScheduler, syncAll } from "./src/sync.mjs";
 import { stopAll } from "./src/chrome.mjs";
@@ -111,8 +111,10 @@ async function main() {
         const rows = await listAccounts();
         if (!rows.length) return console.log("（暂无账号，运行 npm run account 添加）");
         for (const a of rows) {
+          const usage = await getUsage(a.id);
+          const consumed = Math.max(0, (usage.submitted || 0) - (usage.refunded || 0));
           console.log(
-            `${a.id.padEnd(14)} ${String(a.status).padEnd(10)} user=${a.upstreamUserId || "-"} 免费已用=${a.freeUsedToday ?? "-"} ${a.lastError ? "err=" + a.lastError : ""}`,
+            `${a.id.padEnd(14)} ${String(a.disabled ? "disabled" : a.status).padEnd(10)} user=${(a.upstreamUserId || "-").padEnd(12)} 已消耗 ${consumed}/${RUNTIME.freeDailyLimit} 次 ${a.lastError ? "err=" + a.lastError : ""}`,
           );
         }
         return;
@@ -187,7 +189,10 @@ async function main() {
   npm run gen -- --prompt "..."   命令行提交一条生成
   npm run challenge -- <id> 触发人机验证（会开有头窗口）
 
-环境变量：PORT / HEADED=1 / SYNC_INTERVAL_MS / CHROME_PATH`);
+环境变量：
+  PORT / HEADED=1 / SYNC_INTERVAL_MS / CHROME_PATH / LANE=chrome|ego
+  FREE_DAILY_LIMIT（默认 15）/ MAX_ACTIVE_PER_ACCOUNT（默认 2，与上游一致）
+  SUBMIT_CONCURRENCY（默认 2）/ MIN_SUBMIT_INTERVAL_MS（默认 4000）/ DEDUP_WINDOW_MS（默认 60000）`);
   }
 }
 

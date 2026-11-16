@@ -18,7 +18,7 @@
 | **关键结论 1** | **读通道**可以纯 HTTP + Cookie 直连（`/auth/me`、`/v1/videos`、`/v1/videos/{id}`、CDN 直链） |
 | **关键结论 2** | **写通道必须走真实浏览器**（TLS/JA3 指纹 + Turnstile）。这决定了落地架构不是「纯代理」，而是「代理 + 浏览器执行器」 |
 | **产物回流** | `GET /v1/videos/{id}/content` 带 Cookie → `302` 到 `media.paba.tv`（公开 CDN、支持 Range）→ 本地直接 `curl` 即可镜像，无需鉴权 |
-| **模型与计费** | 8 个视频模型；`minimax-h3-flash` 768p **全时长 0 元**（每日免费额度 15 条），`-vip` 1 元/秒，`minimax-h3` 5 元/秒，`dreamina-seedance-2-0-fast` 480p ≈13 元/秒 |
+| **免费额度与并发** | 8 个视频模型；`minimax-h3-flash` 768p 全时长 0 元（每日 15 条），**且每账号最多 2 条在排队/生成中**（第 3 条 `429 too_many_pending`） |
 | **落地形态** | 本地服务 `:8790`：账号池（每账号独立浏览器 profile）+ 双通道执行器 + 任务状态机 + 资产镜像（`data/assets/日期/ID.mp4|.jpg|.json`）+ SSE 实时工作台 |
 | **可验证状态** | ✅ 读同步、✅ 通过服务提交、✅ 成片落盘 11 MB 已实测；⚠️ 免费队列排队 10+ 位，成片延迟 10–40 分钟 |
 
@@ -181,10 +181,24 @@ POST /v1/videos/generations
 
 | 观察 | 数据 |
 |------|------|
-| 单日免费额度 | 视频页「今日剩 15 条」；提交后 `billing.free=true, cost=0` |
+| 单日免费额度 | 视频页「今日剩 N 条」；提交后 `billing.free=true, cost=0`；实测上限 15 次/账号 |
+| **单账号在途上限** | **2 条**。第 3 条提交直接 `429 too_many_pending`，错误体还回 `open[]` 列出占位任务 |
 | 队列水位 | 同一时刻 `{running:4, pending:7, done:18564}` |
-| 单任务排位 | 提交后 `queue_position=12 → 11`（约 2 分钟挪 1 位） |
+| 单任务排位 | 提交后 `queue_position=12 → 11`（约 2 分钟挪 1 位）；另一条 20 分钟内从 11 走到 2 |
 | 成片耗时段 | 历史任务 `started_at → finished_at ≈ 126 秒`；免费档总耗时 **10–40 分钟** |
+
+**429 响应体（实测原文）**
+
+```json
+{ "error": {
+    "message": "免费档已有 2 条视频在排队或生成中，等其中一条完成再提交（付费模型另算）",
+    "type": "too_many_pending",
+    "open": [{ "request_id": "h3_...", "status": "pending", "prompt": "…" }]
+} }
+```
+
+→ 这是**服务端强制的每账号并发闸门**，本地再做多账号池才有意义：单账号堆任务只会全部变慢。
+落地实现把该闸门设为「提交前本地先拦（`MAX_ACTIVE_PER_ACCOUNT=2`）+ 上游返回则立即失败并退还额度，不重试」。
 
 ---
 
@@ -226,7 +240,11 @@ POST /v1/videos/generations
 | 写通道 | **真实浏览器内 `fetch`**，不用 Node 直连 | curl 无论如何都是 403（§2.5） |
 | 读通道 | 同样走浏览器，但可切换 HTTP 快路 | 挑战一旦触发，读口也会被拦，统一通道更省心 |
 | 多账号 | **一账号一 profile + 一调试端口**（ChromeLane）；或一账号一 `taskSpace`（EgoLane） | Cookie 在 profile 内隔离，天然不串号 |
-| 同账号并发 | **串行队列**（`lane.run()`） | 免费额度 15/天，并发只会互相挤队列；且同一账号并发写易触发风控 |
+| 同账号并发 | **串行队列 + 在途上限 2**（`MAX_ACTIVE_PER_ACCOUNT`） | 上游 `429 too_many_pending` 明写只允许 2 条（§2.6）；并发只会互相挤队列 |
+| 全局并发 | **2**（`SUBMIT_CONCURRENCY`） | 免费档提交本身要 2–4s 且要过浏览器通道，堆并发没有收益 |
+| 额度记法 | **本地账本按「消耗次数」预扣，失败退还，同步时用上游当日条数校准（只上调）** | 上游没有额度查询接口（`prices.trial` 常为空），只能自己记账 + 事后对账 |
+| 重复提交 | 同参数 60s 内幂等去重；上游 `409 duplicate_submission` 视为已存在 | bundle `submitKey()` 语义 |
+| 模型范围 | **白名单只放 `minimax-h3-flash`** | 其余模型按秒扣积分（§2.4），本地误调会造成真实扣费 |
 | 挑战处理 | 捕获 `403 challenge_required` → 自动打开 `__h3c/fresh.html` → 等真人过验证 → 自动重试原请求 | 与前端 `mailPost` 的重试语义一致（§2.5） |
 | 幂等 | 本地生成 `Idempotency-Key` 并留档；命中 `409 duplicate_submission` 视为已提交 | bundle `submitKey()` |
 | 产物回流 | 优先 `cdn_url`（公开、Range），失败回落 `/content`（带 Cookie，302 跟随） | 两条路都实测可用；CDN 免鉴权更稳 |
@@ -269,8 +287,12 @@ POST /v1/videos/generations
 | 账号接管（ego 会话） | ✅ `user_id=s2a:3976`，同步 2 条记录 |
 | 资产镜像 | ✅ `data/assets/2026-11-12/h3_fe766…mp4` **11.3 MB** + 缩略图 + 旁车 JSON |
 | 通过服务提交 | ✅ 返回 `h3_91b7189c…`，`billing {cost:0, free:true}` |
-| 工作台渲染 | ✅ 见 `.analysis/docs/ui-工作台.png`（账号池 / 记录网格 / 日志三区正常） |
-| 免费队列 | ⏳ `pending`，排位 11，ETA 空（免费档 10–40 分钟） |
+| 工作台渲染 | ✅ 见 `.analysis/docs/ui-工作台.png`（账号池 / 队列条 / 额度条 / 记录网格 / 日志） |
+| 模型白名单 | ✅ `model=minimax-h3` → `400`「只允许免费模型…」 |
+| 额度账本 | ✅ 提交 4 次、失败 2 次 → `submitted 4 / refunded 2 / consumed 2`，与上游当日 2 条一致 |
+| 并发闸门 | ✅ 在途 2 条时再提交 → `409 too_many_pending`（本地先拦，上游兜底） |
+| 幂等去重 | ✅ 两条同参数并发提交 → 只产生 1 个 job |
+| 免费队列 | ⏳ 两条任务在队（排位 11 → 2），成片后自动镜像 |
 
 ---
 
@@ -294,7 +316,8 @@ POST /v1/videos/generations
 |----|------|----------|
 | 参考图上传 | 前端用 data URL（>2 MB 走 XHR 进度），本地服务已透传 `reference_images` 但**未实测大于阈值的行为** | 是否需要本地上传压缩 + 分片 |
 | 图像 / 音频 / 画布 | 端点已识别（`/v1/objects/generations`、`/v1/audio/generations`、`/v1/workbench/*`），未接入 | 是否按同一车道扩三个面板 |
-| 免费队列等待 | 排位 10+，ETA 为空 | 是否做「提交后关掉浏览器、只留 HTTP 轮询」（需验证读口是否也需要指纹） |
+| 免费队列等待 | 已做自适应同步（有在途 20s / 空闲 45s）+ 界面显示队列位次 | 是否需要「出片后系统通知」 |
+| 上游无额度查询口 | `prices.trial` 实测为空，拿不到「剩余次数」 | 只能本地账本 + 当日条数校准；若上游改口径需重测 |
 | 多账号真机验证 | 本沙箱只能跑通 `EgoLane`（单账号）；`ChromeLane` 每账号独立 profile 需在本机终端验证 | 需要一次真机多账号联调 |
 | 排队加速 | 存在 `jump`/`tier` 档位 | 是否开放付费档按钮（会产生真实费用） |
 | 成本闸门 | 目前不限制模型 | 是否需要「非免费模型需二次确认」的硬开关 |

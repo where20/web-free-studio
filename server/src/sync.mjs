@@ -1,6 +1,16 @@
 import { laneFor, ChallengeError, AuthError } from "./lane.mjs";
 import { RUNTIME } from "./config.mjs";
-import { upsertAccount, upsertTask, listAccounts, logEvent, getTask } from "./store.mjs";
+import {
+  upsertAccount,
+  upsertTask,
+  listAccounts,
+  logEvent,
+  getTask,
+  getUsage,
+  consumedOf,
+  listTasks,
+  reconcileUsage,
+} from "./store.mjs";
 import { emit } from "./events.mjs";
 
 function normalizeField(t) {
@@ -105,13 +115,16 @@ export async function syncAccount(account, { limit = RUNTIME.listLimit, mirror =
         t.billing?.free &&
         (t.created_at || 0) * 1000 >= startOfToday(),
     ).length;
+    await reconcileUsage(account.id, freeToday);
+    const usage = await getUsage(account.id);
 
     await upsertAccount({
       id: account.id,
       status: "online",
       lastSyncAt: Date.now(),
       lastSyncMs: Date.now() - started,
-      freeUsedToday: freeToday,
+      upstreamFreeToday: freeToday,
+      freeUsedToday: Math.max(consumedOf(usage), freeToday),
       lastQueue: res?.queue || null,
       lastError: null,
       needsChallenge: false,
@@ -155,24 +168,40 @@ export async function syncAll(opts = {}) {
   return out;
 }
 
-export function startScheduler({ intervalMs = RUNTIME.syncIntervalMs } = {}) {
+/**
+ * 自适应同步：有任务在排队/生成时用快节奏（默认 20s），
+ * 全空闲时退回慢节奏（默认 45s），避免空转和无谓的上游请求。
+ */
+export function startScheduler({ intervalMs = RUNTIME.syncIntervalMs, fastMs = RUNTIME.syncFastMs } = {}) {
   let timer = null;
   let busy = false;
+  let stopped = false;
+
   const tick = async () => {
     if (busy) return;
     busy = true;
+    let hasActive = false;
     try {
       await syncAll();
+      const tasks = await listTasks({ limit: 200 });
+      hasActive = tasks.some((t) => ["pending", "queued", "running"].includes(t.status));
     } catch (e) {
       await logEvent("scheduler_error", e.message);
     } finally {
       busy = false;
+      if (!stopped) {
+        timer = setTimeout(tick, hasActive ? fastMs : intervalMs);
+        timer.unref?.();
+      }
     }
   };
-  timer = setInterval(tick, intervalMs);
+
+  timer = setTimeout(tick, 3000);
   timer.unref?.();
-  setTimeout(tick, 3000).unref?.();
-  return () => clearInterval(timer);
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
 }
 
 export function startOfToday() {
