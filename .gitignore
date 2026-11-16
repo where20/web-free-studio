@@ -7,6 +7,10 @@ data/*.local.json
 data/db.json
 data/veda.device.json
 data/.server.lock
+data/daemon.log
+data/daemon.err.log
 .analysis/raw/app-*.js
 .analysis/raw/submit*.json
 data/accounts/
+mcp/node_modules/
+mcp/.npmignore

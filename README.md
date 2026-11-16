@@ -188,6 +188,66 @@ curl -s --noproxy '*' -X POST http://localhost:8790/api/veda/jobs/<jobId>/cancel
 
 ---
 
+## 通用化 · 让本机所有 agent 都能用（v0.3）
+
+把工作台暴露成 **标准 MCP 工具**，WorkBuddy / Codex / Claude Code / Cursor 等任何 MCP 客户端
+挂上就有工具用。适配层在 [`mcp/`](./mcp/)，独立发布在 `github.com/where20/web-free-studio-mcp`。
+
+```
+MCP 客户端  →  wfs-mcp (stdio)  →  daemon :8790  →  PabaTV / Veda Studio
+```
+
+### 装
+
+```bash
+# 1. 写各 agent 的 MCP 配置（自动检测已装的客户端）
+node mcp/scripts/install.mjs
+
+# 2. 自检
+node mcp/scripts/doctor.mjs
+```
+
+装完后 WorkBuddy 需在**连接器管理页右上角点「信任」**才生效；Codex / Claude Code 需重启客户端。
+
+### 七个工具
+
+| 工具 | 作用 |
+|---|---|
+| `wfs_status` | 账号池、各账号今日额度、在途任务、Veda 剩余 credit |
+| `wfs_generate` | 提交生成任务（`provider` = veda / paba，支持参考素材本地路径） |
+| `wfs_tasks` | 列出任务 |
+| `wfs_task` | 查单任务状态与产物路径 |
+| `wfs_accounts` | 账号池管理（列表/同步/停用/验证/授权/导入 cookie/删除） |
+| `wfs_sync` | 主动同步上游 |
+| `wfs_doctor` | 环境自检 |
+
+### daemon 会自动拉起
+
+**不需要手动开终端敲 `npm start`** —— MCP 适配层在第一次调用工具时发现 daemon 没跑，
+会自己把它启动（spawn + 端口探测 + 幂等）。这是刻意的设计：本机的
+`launchctl bootstrap` 与 `crontab` 都被沙箱禁用，做不了开机自启，
+所以把「拉起 daemon」这件事下沉到适配层按需触发。
+
+### 换电脑
+
+```bash
+# 全新机器上只需这两步
+npx -y github:where20/web-free-studio-mcp install   # 写 MCP 配置
+npx -y github:where20/web-free-studio-mcp doctor    # 自检
+```
+
+| 项 | 能否迁移 | 说明 |
+|---|---|---|
+| 代码 + MCP 配置 | ✅ | npx 一行搞定 |
+| 任务账本 / 产物 | ✅ | 复制 `data/db.json`、`data/assets/` |
+| Veda 额度 | ⚠️ **不迁移** | 按出口 IP 计，新电脑是新额度 |
+| Paba 账号 cookie | ⚠️ 手动 | 复制 `data/accounts/*.cookies.json`，或重新授权 |
+| Chrome profile | ❌ 不建议 | 含机器绑定数据，重新授权更干净 |
+
+详细说明见 [`mcp/README.md`](./mcp/README.md) 与 [`mcp/SKILL.md`](./mcp/SKILL.md)。
+
+---
+
 ## 本地目录
 
 ```
