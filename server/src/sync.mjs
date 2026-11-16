@@ -153,8 +153,14 @@ async function syncAccountInner(account, { limit = RUNTIME.listLimit, mirror = t
       const base = normalizeField(t);
       const prev = await getTask({ accountId: account.id, upstreamId: base.upstreamId });
       const row = { ...base, accountId: account.id };
-      if (prev?.asset?.video) {
-        row.asset = prev.asset;
+      if (prev) {
+        if (prev.asset?.video) row.asset = prev.asset;
+        // 镜像退避状态必须跨同步保留：上游返回的任务对象里没有这些字段，
+        // 不保留的话每轮同步都会覆盖回 undefined，失败上限 / 30 分钟退避全部失效，
+        // 死链任务会无限重试并占死并发 1 的镜像队列，饿死后续新任务
+        row.assetAttempts = prev.assetAttempts ?? 0;
+        row.assetError = prev.assetError ?? null;
+        row.assetSkipUntil = prev.assetSkipUntil ?? 0;
       }
       await upsertTask(row);
       synced += 1;

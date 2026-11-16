@@ -194,25 +194,27 @@ class BaseLane {
   }
 
   async downloadViaLane(id, out) {
-    const payload = await this.exec(
+    // ego 页内 evaluate 有 15s 硬上限（setDefaultTimeout 也改不掉），
+    // 不能在页面里下完整视频。改为只借页面解析 /content 的 302 重定向
+    // 拿到新鲜 CDN 直链（只等响应头，秒级返回），再由 Node 直接下载公开 CDN。
+    const info = await this.exec(
       `(async () => {
         const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 600000);
-        const r = await fetch("/v1/videos/${id}/content", { credentials: "include", signal: ctl.signal });
+        const timer = setTimeout(() => ctl.abort(), 12000);
+        const r = await fetch("/v1/videos/${id}/content", { credentials: "include", redirect: "follow", signal: ctl.signal });
         clearTimeout(timer);
-        if (!r.ok) return { error: r.status };
-        const buf = new Uint8Array(await r.arrayBuffer());
-        const chunk = 0x8000;
-        let s = "";
-        for (let i = 0; i < buf.length; i += chunk) s += String.fromCharCode.apply(null, buf.subarray(i, i + chunk));
-        return { b64: btoa(s), type: r.headers.get("content-type") };
+        const ct = r.headers.get("content-type") || "";
+        try { await r.body?.cancel(); } catch {}
+        return { url: r.url, status: r.status, type: ct };
       })()`,
-      620_000,
+      30_000,
     );
-    if (!payload?.b64) throw new UpstreamError("内容下载失败");
-    const buf = Buffer.from(payload.b64, "base64");
-    await fs.writeFile(out, buf);
-    return buf.length;
+    if (!info || info.status >= 400) throw new UpstreamError(`内容地址解析失败 ${info?.status ?? "无响应"}`);
+    if (!info.url || !info.url.startsWith(UPSTREAM.contentHost)) {
+      // /content 直接 200 返回本体（而非 302 到公开 CDN）时，Node 无法绕过 TLS 指纹拦截
+      throw new UpstreamError(`未拿到 CDN 直链（${info.url || "无 url"}）`);
+    }
+    return downloadTo(info.url, out);
   }
 }
 
@@ -525,6 +527,8 @@ if (INJECT) {
     } catch {}
   }
 }
+const EVAL_TO = ${Math.min(600_000, Math.max(15_000, timeoutMs - 30_000))};
+try { await page.setDefaultTimeout(EVAL_TO); } catch {}
 const value = await page.evaluate(EXPR);
 console.log("__FS__" + JSON.stringify(value === undefined ? null : value));
 `;
@@ -561,6 +565,8 @@ if (INJECT) {
     } catch {}
   }
 }
+const EVAL_TO = ${Math.min(600_000, Math.max(15_000, timeoutMs - 30_000))};
+try { await page.setDefaultTimeout(EVAL_TO); } catch {}
 const value = await page.evaluate(EXPR);
 console.log("__FS__" + JSON.stringify(value === undefined ? null : value));
 `;
