@@ -123,13 +123,33 @@ export async function generate(input) {
   return { jobId, accountId, upstreamId: job.upstreamId, deduped, status: "submitted" };
 }
 
+async function ensureBrowser(accountId, { headless }) {
+  const browser = getBrowser(accountId, { headless });
+  try {
+    const task = (async () => {
+      const alive = await browser.alive();
+      if (!alive) await browser.launch();
+      else if (!headless && browser.headless) await browser.relaunch(false); // 需要可见窗口（人工登录/验证）
+      return browser;
+    })();
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("启动超时（30s）")), 30_000),
+    );
+    return await Promise.race([task, timeout]);
+  } catch (e) {
+    throw Object.assign(
+      new Error(
+        `本机 Chrome 起不来：${e.message}。可改用「导入 Cookie」接入，或在普通终端运行 npm run account。`,
+      ),
+      { code: "chrome_unavailable" },
+    );
+  }
+}
+
 export async function loginAccount(accountId, { timeoutMs = 300_000 } = {}) {
   const account = await getAccount(accountId);
   if (!account) throw new Error(`账号不存在：${accountId}`);
-  const browser = getBrowser(accountId, { headless: false });
-  if (!(await browser.alive()) || browser.headless) {
-    await browser.relaunch(false);
-  }
+  const browser = await ensureBrowser(accountId, { headless: false });
   const page = await Page.open(browser.port, UPSTREAM.loginPage);
   await logEvent("login_wait", `[${account.label}] 已打开登录页，等待人工授权…`, { accountId });
   emit("login", { accountId, phase: "awaiting_user" });
@@ -161,6 +181,25 @@ export async function loginAccount(accountId, { timeoutMs = 300_000 } = {}) {
   throw new Error("登录等待超时");
 }
 
+const loginInFlight = new Map();
+
+/**
+ * 非阻塞版登录：立刻返回，浏览器窗口留给用户操作，
+ * 登录成功后通过 SSE(login) + 状态同步体现。CLI 仍用阻塞版。
+ */
+export function startLogin(accountId) {
+  if (loginInFlight.has(accountId)) return { ok: true, phase: "awaiting_user", reused: true };
+  const task = loginAccount(accountId)
+    .catch(async (e) => {
+      await upsertAccount({ id: accountId, lastError: e.message, status: "new" }).catch(() => {});
+      emit("login", { accountId, phase: "error", message: e.message });
+      await logEvent("login_failed", `[${accountId}] ${e.message}`, { accountId, code: e.code }).catch(() => {});
+    })
+    .finally(() => loginInFlight.delete(accountId));
+  loginInFlight.set(accountId, task);
+  return { ok: true, phase: "awaiting_user" };
+}
+
 export async function syncOne(accountId) {
   const account = await getAccount(accountId);
   if (!account) throw new Error(`账号不存在：${accountId}`);
@@ -175,8 +214,7 @@ export async function seedCookies(accountId, cookies) {
   const account = await getAccount(accountId);
   if (!account) throw new Error(`账号不存在：${accountId}`);
   if (!Array.isArray(cookies) || !cookies.length) throw new Error("cookies 为空");
-  const browser = getBrowser(accountId, { headless: true });
-  if (!(await browser.alive())) await browser.launch();
+  const browser = await ensureBrowser(accountId, { headless: true });
   const page = await Page.open(browser.port, "https://www.paba.tv/");
   await page.send("Network.enable");
   for (const c of cookies) {
@@ -314,16 +352,31 @@ export function createServer() {
       if (p === "/api/accounts" && req.method === "POST") {
         const body = await readBody(req);
         const id = (body.id || `acct-${Date.now().toString(36)}`).replace(/[^\w-]/g, "");
+        const backend = body.backend || process.env.LANE || "chrome";
+        if (backend === "ego") {
+          const others = (await listAccounts()).filter(
+            (a) => a.id !== id && a.backend === "ego" && a.status !== "removed",
+          );
+          if (others.length) {
+            throw Object.assign(
+              new Error(
+                `ego 后端共用一个浏览器会话，只能接管 1 个账号（已有 ${others[0].label}）。第 2 个账号请用「浏览器登录」或「导入 Cookie」。`,
+              ),
+              { code: "validation" },
+            );
+          }
+        }
         const account = await upsertAccount({
           id,
           label: body.label || id,
           status: "new",
           headless: true,
-          backend: body.backend || process.env.LANE || "chrome",
+          backend,
+          disabled: false,
         });
-        await logEvent("account_added", `新增账号槽位 ${id}`, { accountId: id });
+        await logEvent("account_added", `新增账号槽位 ${id}（${backend}）`, { accountId: id });
         if (body.login) {
-          const out = await loginAccount(id);
+          const out = startLogin(id);
           return json(res, 200, { account: accountView(await getAccount(id)), login: out });
         }
         return json(res, 200, accountView(account));
@@ -332,7 +385,7 @@ export function createServer() {
       const acctMatch = p.match(/^\/api\/accounts\/([^/]+)\/(login|sync|challenge|delete|cookies|toggle)$/);
       if (acctMatch) {
         const [, id, action] = acctMatch;
-        if (action === "login") return json(res, 200, await loginAccount(id));
+        if (action === "login") return json(res, 200, startLogin(id));
         if (action === "sync") return json(res, 200, await syncOne(id));
         if (action === "challenge") return json(res, 200, await solveChallengeFor(id));
         if (action === "toggle" && req.method === "POST") {
@@ -404,7 +457,9 @@ export function createServer() {
               ? 400
               : e.code === "too_many_pending"
                 ? 409
-                : 500;
+                : e.code === "chrome_unavailable"
+                  ? 503
+                  : 500;
       return json(res, code, { error: e.message, code: e.code || "error" });
     }
   });

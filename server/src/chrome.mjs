@@ -26,6 +26,19 @@ export class Browser {
   }
 
   async launch() {
+    try {
+      return await this.launchOnce();
+    } catch (e) {
+      // 无头在某些环境（沙箱/无 GPU）会秒崩：自动降级为有头再试一次
+      if (this.headless) {
+        this.headless = false;
+        return this.launchOnce();
+      }
+      throw e;
+    }
+  }
+
+  async launchOnce() {
     const bin = chromePath();
     if (!bin) throw new Error("未找到 Chrome/Chromium，请先安装 Google Chrome 或设置 CHROME_PATH");
     await this.ensureDirs();
@@ -51,7 +64,20 @@ export class Browser {
     this.proc.on("exit", () => {
       this.proc = null;
     });
-    await waitForChrome(this.port, 25_000);
+    // 端口就绪 与 进程提前退出 竞速：沙箱/权限问题下 Chrome 会秒崩，必须快速失败而不是干等
+    const ready = waitForChrome(this.port, 12_000);
+    const crashed = new Promise((_, reject) => {
+      this.proc.once("exit", (code) => reject(new Error(`Chrome 启动后立即退出（code ${code}）`)));
+    });
+    try {
+      await Promise.race([ready, crashed]);
+    } catch (e) {
+      try {
+        this.proc?.kill("SIGKILL");
+      } catch {}
+      this.proc = null;
+      throw e;
+    }
     return this;
   }
 

@@ -84,6 +84,20 @@
   .quota .track{flex:1;height:5px;border-radius:3px;background:#eef1f5;overflow:hidden}
   .quota .track i{display:block;height:100%;background:linear-gradient(90deg,#4a86ff,#8fb4ff)}
   .quota .track i.full{background:linear-gradient(90deg,#e05757,#f08a8a)}
+  .modal{position:fixed;inset:0;background:rgba(16,24,40,.42);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px}
+  .modal[hidden]{display:none}
+  .sheet{background:#fff;border-radius:16px;max-width:540px;width:100%;box-shadow:0 24px 60px rgba(16,24,40,.22);overflow:hidden}
+  .sheet h4{margin:0;padding:16px 18px 12px;font-size:15px;display:flex;align-items:center}
+  .sheet h4 button{margin-left:auto;border:0;background:transparent;font-size:18px;line-height:1;padding:0 4px;cursor:pointer;color:var(--sub)}
+  .sheet .tabs{display:flex;padding:0 18px;border-bottom:1px solid var(--line)}
+  .sheet .tabs button{border:0;background:transparent;border-radius:0;padding:9px 2px;margin-right:14px;color:var(--sub);border-bottom:2px solid transparent}
+  .sheet .tabs button.on{color:var(--brand);border-bottom-color:var(--brand);font-weight:600}
+  .sheet .pane{padding:16px 18px 18px}
+  .sheet .pane[hidden]{display:none}
+  .sheet .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+  .sheet textarea{min-height:120px;font-family:var(--mono);font-size:12px}
+  .sheet .steps{font-size:12.5px;color:var(--sub);line-height:1.8}
+  .sheet .steps code{background:var(--chip);padding:1px 5px;border-radius:5px}
   .queuebar{display:flex;gap:10px;flex-wrap:wrap;padding:9px 16px;border-bottom:1px solid var(--line);font-size:12px;color:var(--sub);align-items:center}
   .queuebar b{color:var(--ink)}
 </style>
@@ -96,6 +110,7 @@
     <span class="pill" id="live"><span class="dot"></span><span>连接中…</span></span>
     <span class="pill" id="syncinfo">尚未同步</span>
     <a class="linkbtn" id="siteEntry" href="https://www.paba.tv/#video" target="_blank" rel="noopener">打开原站 ↗</a>
+    <button id="btnAddTop">＋ 新增账号</button>
     <button id="btnSyncAll" class="primary">同步全部</button>
   </div>
 </header>
@@ -132,16 +147,12 @@
   </section>
 
   <section class="card">
-    <h3>账号池 <span class="pill" id="acctCount">0</span></h3>
+    <h3>账号池 <span class="pill" id="acctCount">0</span><span class="pill" id="poolSum"></span></h3>
     <div class="queuebar" id="queuebar"></div>
     <div class="body acct" id="accounts"></div>
-    <div class="body" style="border-top:1px solid var(--line)">
-      <label class="f" style="margin-top:0">新增账号（独立 profile，互不串号）</label>
-      <div class="addrow">
-        <input id="newLabel" placeholder="账号备注，如 小号A" />
-        <button id="btnAddAcct" class="primary">授权登录</button>
-      </div>
-      <div class="hint">点「授权登录」会打开一个有头 Chrome 窗口，登录完自动接管；已有登录态也可用 <code>npm run cookie</code> 导入。</div>
+    <div class="body" style="border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button id="btnAddAcct" class="primary">＋ 新增账号</button>
+      <span class="hint" style="margin:0">每个账号独立浏览器 profile（登录态/设备态互不串号）；单账号每天 15 次、最多 2 条在途，加账号才能扩总额度与并发。</span>
     </div>
 
     <h3 style="border-top:1px solid var(--line)">生成记录 <span class="pill" id="taskCount">0</span></h3>
@@ -157,6 +168,45 @@
   <h3>运行日志</h3>
   <div class="log" id="log"></div>
 </section>
+
+<div class="modal" id="addModal" hidden>
+  <div class="sheet">
+    <h4>新增账号<button id="addClose" aria-label="关闭">×</button></h4>
+    <div class="tabs">
+      <button data-tab="browser" class="on">浏览器登录</button>
+      <button data-tab="cookie">导入 Cookie</button>
+      <button data-tab="ego">接管 ego 会话</button>
+    </div>
+    <div class="pane" data-pane="browser">
+      <label class="f" style="margin-top:0">账号备注</label>
+      <input id="addLabel" placeholder="如 小号A" />
+      <div class="steps" style="margin-top:10px">
+        会打开一个有头 Chrome 窗口，用该账号登录（Google 或邮箱验证码），登录完成自动接管并同步。<br/>
+        每个账号独占一个 profile 目录，登录态互不影响。
+      </div>
+      <div class="foot"><button id="addBrowserGo" class="primary">打开登录窗口</button></div>
+    </div>
+    <div class="pane" data-pane="cookie" hidden>
+      <label class="f" style="margin-top:0">账号备注</label>
+      <input id="addLabel2" placeholder="如 小号A" />
+      <label class="f">Cookie JSON（数组，字段 name / value / path / httpOnly / expires）</label>
+      <textarea id="addCookies" placeholder='[{"name":"h3v","value":"...","path":"/","httpOnly":true},{"name":"h3s","value":"...","path":"/","httpOnly":true},{"name":"__Host-h3d","value":"...","path":"/","httpOnly":true}]'></textarea>
+      <div class="steps" style="margin-top:8px">
+        从已登录的浏览器 DevTools → Application → Cookies 复制，导入后立即校验 <code>/auth/me</code>。
+      </div>
+      <div class="foot"><button id="addCookieGo" class="primary">导入并校验</button></div>
+    </div>
+    <div class="pane" data-pane="ego" hidden>
+      <label class="f" style="margin-top:0">账号备注</label>
+      <input id="addLabel3" placeholder="如 主账号" />
+      <div class="steps" style="margin-top:10px">
+        接管本机 ego 浏览器里已登录的会话，无需再次登录。<br/>
+        ego 只有一个浏览器 profile，所以只能接管 <b>1 个</b>账号；第 2 个账号请用前两种方式。
+      </div>
+      <div class="foot"><button id="addEgoGo" class="primary">接管会话</button></div>
+    </div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -188,6 +238,11 @@ function renderAccounts() {
   const box = $("accounts");
   const list = STATE.accounts.filter((a) => a.status !== "removed");
   $("acctCount").textContent = list.length;
+  const limit = STATE.limits.freeDailyLimit ?? 15;
+  const conc = STATE.limits.maxActivePerAccount ?? 2;
+  $("poolSum").textContent = list.length
+    ? `总 ${list.length * limit} 次/天 · 并发 ${list.length * conc}`
+    : "未接入";
   box.innerHTML = "";
   if (!list.length) {
     box.innerHTML = `<div class="hint">还没有账号。下面新增一个，或终端运行 <code>npm run account</code>。</div>`;
@@ -220,7 +275,13 @@ function renderAccounts() {
         b.disabled = true;
         try {
           if (op === "sync") { await api(`/api/accounts/${a.id}/sync`, { method: "POST" }); toast("已同步 " + a.label); }
-          if (op === "login") { toast("已打开登录窗口，请完成授权…"); await api(`/api/accounts/${a.id}/login`, { method: "POST" }); toast("授权成功"); }
+          if (op === "login") {
+            await api(`/api/accounts/${a.id}/login`, { method: "POST" });
+            toast("已打开登录窗口，请完成授权…");
+            await refresh();
+            const done = await waitOnline(a.id);
+            toast(done ? "授权成功" : "登录未完成", !done);
+          }
           if (op === "challenge") { toast("已打开人机验证窗口，请在弹窗内完成…"); await api(`/api/accounts/${a.id}/challenge`, { method: "POST" }); toast("验证完成"); }
           if (op === "toggle") { await api(`/api/accounts/${a.id}/toggle`, { method: "POST", body: JSON.stringify({ disabled: !a.disabled }) }); }
           await refresh();
@@ -405,21 +466,101 @@ $("btnSyncAll").onclick = async () => {
   catch (e) { toast(e.message, true); }
   finally { b.disabled = false; b.textContent = "同步全部"; }
 };
-$("btnAddAcct").onclick = async () => {
-  const label = $("newLabel").value.trim() || `账号${STATE.accounts.length + 1}`;
-  const b = $("btnAddAcct"); b.disabled = true; b.textContent = "等待登录…";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function waitOnline(id, timeoutMs = 300000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(2000);
+    try {
+      const st = await api("/api/state");
+      const a = st.accounts.find((x) => x.id === id);
+      if (a && a.status === "online") { STATE = st; renderAll(); return a; }
+    } catch {}
+  }
+  return null;
+}
+
+const addModal = $("addModal");
+function openAdd() { addModal.hidden = false; setTimeout(() => $("addLabel").focus(), 60); }
+$("btnAddTop").onclick = openAdd;
+$("btnAddAcct").onclick = openAdd;
+$("addClose").onclick = () => { addModal.hidden = true; };
+addModal.addEventListener("click", (e) => { if (e.target === addModal) addModal.hidden = true; });
+document.querySelectorAll(".sheet .tabs button").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll(".sheet .tabs button").forEach((x) => x.classList.toggle("on", x === b));
+    document.querySelectorAll(".sheet .pane").forEach((pane) => {
+      pane.hidden = pane.dataset.pane !== b.dataset.tab;
+    });
+  };
+});
+
+async function createAccount(label, backend, btn, busyText) {
+  const name = (label || "").trim() || `账号${STATE.accounts.length + 1}`;
+  const id = name.toLowerCase().replace(/[^\w-]/g, "-") || `acct-${Date.now().toString(36)}`;
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = busyText;
   try {
-    const id = label.toLowerCase().replace(/[^\w-]/g, "-");
-    await api("/api/accounts", { method: "POST", body: JSON.stringify({ id, label }) });
-    toast("已打开登录窗口，请完成授权…");
+    await api("/api/accounts", { method: "POST", body: JSON.stringify({ id, label: name, backend }) });
+    return id;
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+
+$("addBrowserGo").onclick = async () => {
+  const btn = $("addBrowserGo");
+  try {
+    const id = await createAccount($("addLabel").value, "chrome", btn, "启动中…");
+    btn.disabled = true; btn.textContent = "等待登录…";
     await api(`/api/accounts/${id}/login`, { method: "POST" });
-    $("newLabel").value = "";
-    activeAccount = id;
-    localStorage.setItem("fs.account", id);
-    toast("账号 " + label + " 已接入");
+    addModal.hidden = true; $("addLabel").value = "";
+    activeAccount = id; localStorage.setItem("fs.account", id);
+    toast("已打开登录窗口，请在该窗口完成登录（别关窗口）…");
+    await refresh();
+    const a = await waitOnline(id);
+    toast(a ? "账号已接入：" + (a.upstreamUserId || a.label) : "登录未完成，可稍后在账号池点「授权」继续", !a);
+  } catch (e) {
+    toast(e.message, true);
+    if (/Chrome 起不来|chrome_unavailable/.test(e.message)) {
+      toast("改用「导入 Cookie」标签页，或在本机终端运行 npm run account", true);
+    }
+  } finally { btn.disabled = false; btn.textContent = "打开登录窗口"; }
+};
+
+$("addCookieGo").onclick = async () => {
+  const btn = $("addCookieGo");
+  let cookies;
+  try {
+    cookies = JSON.parse($("addCookies").value);
+    if (!Array.isArray(cookies) || !cookies.length) throw new Error("请粘贴 cookie 数组");
+  } catch (e) { return toast("Cookie JSON 解析失败：" + e.message, true); }
+  try {
+    const id = await createAccount($("addLabel2").value, "chrome", btn, "导入中…");
+    btn.disabled = true; btn.textContent = "校验中…";
+    const out = await api(`/api/accounts/${id}/cookies`, { method: "POST", body: JSON.stringify({ cookies }) });
+    addModal.hidden = true; $("addCookies").value = ""; $("addLabel2").value = "";
+    activeAccount = id; localStorage.setItem("fs.account", id);
+    toast("已导入登录态 " + (out.userId || ""));
     await refresh();
   } catch (e) { toast(e.message, true); }
-  finally { b.disabled = false; b.textContent = "授权登录"; }
+  finally { btn.disabled = false; btn.textContent = "导入并校验"; }
+};
+
+$("addEgoGo").onclick = async () => {
+  const btn = $("addEgoGo");
+  try {
+    const id = await createAccount($("addLabel3").value, "ego", btn, "接管中…");
+    btn.disabled = true; btn.textContent = "同步中…";
+    const r = await api(`/api/accounts/${id}/sync`, { method: "POST" });
+    if (r.error) throw new Error(r.error);
+    addModal.hidden = true; $("addLabel3").value = "";
+    activeAccount = id; localStorage.setItem("fs.account", id);
+    toast(`已接管，同步 ${r.synced} 条记录`);
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = "接管会话"; }
 };
 
 function connect() {
