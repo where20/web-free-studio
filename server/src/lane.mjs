@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { Page, sleep } from "./cdp.mjs";
@@ -426,6 +427,16 @@ console.log("__FS__" + JSON.stringify({ ok: true }));
 
   async exec(expr, timeoutMs = 60_000) {
     try {
+      // 参考素材的 data URL 可能有几 MB，塞进 -e 参数会撞 ARG_MAX：改走临时文件
+      if (expr.length > 120_000) {
+        const tmp = path.join(os.tmpdir(), `fs-expr-${Date.now()}-${Math.random().toString(36).slice(2)}.js`);
+        await fs.writeFile(tmp, expr, "utf8");
+        try {
+          return await this.execOnceFromFile(tmp, timeoutMs);
+        } finally {
+          await fs.rm(tmp, { force: true }).catch(() => {});
+        }
+      }
       return await this.execOnce(expr, timeoutMs);
     } catch (e) {
       // 页面忙/超时：后台重建标签页，本次直接失败，避免把车道拖成几分钟
@@ -479,6 +490,45 @@ console.log("__FS__" + JSON.stringify(rows));
     }
     await writeCookies(this.accountId, cookies);
     return payload.json;
+  }
+
+  /** 表达式放在临时文件里，避免命令行参数超长 */
+  async execOnceFromFile(exprFile, timeoutMs = 60_000) {
+    const jar = await this.cookies();
+    const inject = jar.length > 0;
+    const script = `
+const fs = await import("node:fs/promises");
+const SPACE = ${JSON.stringify(this.spaceName)};
+const EXPR_PATH = ${JSON.stringify(exprFile)};
+const JAR = ${JSON.stringify(jar)};
+const INJECT = ${inject ? "true" : "false"};
+const EXPR = await fs.readFile(EXPR_PATH, "utf8");
+const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
+const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
+let page = (await task.pages())[0];
+if (!page) page = await task.newPage();
+const cur = await page.url();
+if (!String(cur).startsWith(${JSON.stringify(UPSTREAM.origin)})) {
+  await page.goto(${JSON.stringify(UPSTREAM.videoPage)}, { timeout: 60000 });
+}
+if (INJECT) {
+  await page.cdp("Network.enable");
+  for (const n of ["h3v", "h3s", "__Host-h3d"]) {
+    try { await page.cdp("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }); } catch {}
+  }
+  for (const c of JAR) {
+    try {
+      await page.cdp("Network.setCookie", {
+        name: c.name, value: c.value, url: "https://www.paba.tv/", path: "/",
+        httpOnly: true, secure: true, ...(c.expires ? { expires: c.expires } : {}),
+      });
+    } catch {}
+  }
+}
+const value = await page.evaluate(EXPR);
+console.log("__FS__" + JSON.stringify(value === undefined ? null : value));
+`;
+    return this.execRaw(script, timeoutMs);
   }
 
   async execOnce(expr, timeoutMs = 60_000, opts = {}) {

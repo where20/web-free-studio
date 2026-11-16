@@ -84,6 +84,17 @@
   .quota .track{flex:1;height:5px;border-radius:3px;background:#eef1f5;overflow:hidden}
   .quota .track i{display:block;height:100%;background:linear-gradient(90deg,#4a86ff,#8fb4ff)}
   .quota .track i.full{background:linear-gradient(90deg,#e05757,#f08a8a)}
+  .modes{display:flex;gap:6px;flex-wrap:wrap}
+  .modes button{flex:1;min-width:80px;padding:8px 6px;font-size:12.5px;border-radius:9px;color:var(--sub)}
+  .modes button.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
+  .drop{border:1px dashed #cfd6e0;border-radius:10px;padding:14px;text-align:center;color:var(--sub);font-size:12px;cursor:pointer;background:#fbfcfe}
+  .drop:hover{border-color:var(--brand);color:var(--brand)}
+  .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .thumb{position:relative;width:64px;height:64px;border-radius:9px;overflow:hidden;border:1px solid var(--line);background:#f1f3f6}
+  .thumb img,.thumb video{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .x{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.62);color:#fff;font-size:12px;line-height:18px;text-align:center;cursor:pointer}
+  .thumb .cap{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.55);color:#fff;font-size:10px;text-align:center;padding:1px 0}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .modal{position:fixed;inset:0;background:rgba(16,24,40,.42);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px}
   .modal[hidden]{display:none}
   .sheet{background:#fff;border-radius:16px;max-width:540px;width:100%;max-height:88vh;overflow:auto;box-shadow:0 24px 60px rgba(16,24,40,.22)}
@@ -100,6 +111,11 @@
   .sheet .steps code{background:var(--chip);padding:1px 5px;border-radius:5px}
   .queuebar{display:flex;gap:10px;flex-wrap:wrap;padding:9px 16px;border-bottom:1px solid var(--line);font-size:12px;color:var(--sub);align-items:center}
   .queuebar b{color:var(--ink)}
+  .seg{display:flex;gap:4px;background:var(--chip);padding:3px;border-radius:10px;margin-bottom:4px}
+  .seg button{flex:1;border:0;background:transparent;color:var(--sub);padding:6px 8px;border-radius:8px;font-size:12.5px}
+  .seg button.on{background:#fff;color:var(--brand);font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.08)}
+  .src{background:#eef3ff!important;color:#2f6df6!important}
+  .src.veda{background:#f3ecff!important;color:#7a45d6!important}
 </style>
 </head>
 <body>
@@ -119,17 +135,60 @@
   <section class="card">
     <h3>新建生成</h3>
     <div class="body">
-      <label class="f">账号</label>
-      <select id="account"></select>
+      <div class="seg" id="sourceSeg">
+        <button data-src="paba" class="on">PabaTV · 账号池</button>
+        <button data-src="veda">Veda Studio · 免账号</button>
+      </div>
+      <div id="pabaFields">
+        <label class="f">账号</label>
+        <select id="account"></select>
+      </div>
       <div class="quota" id="quotaLine"><span>—</span></div>
 
       <label class="f">画面描述（prompt）</label>
       <textarea id="prompt" placeholder="描述画面、动作、镜头和声音，例如：少女立于朱红门廊前，鎏金唐装，镜头缓慢推近，宫灯流转……"></textarea>
 
+      <label class="f" id="modesLabel">生成模式</label>
+      <div class="modes" id="modes"></div>
+
+      <div id="refBlock" hidden>
+        <label class="f">参考图 <span id="refImgCount" style="color:var(--sub)">0/9</span></label>
+        <div class="drop" id="refImgDrop">点击选择或拖入图片（自动压缩到 1280px）</div>
+        <input type="file" id="refImgInput" accept="image/*" multiple hidden />
+        <div class="thumbs" id="refImgs"></div>
+
+        <label class="f">参考视频 <span id="refVidCount" style="color:var(--sub)">0/3</span></label>
+        <div class="drop" id="refVidDrop">点击选择视频（mp4/mov，≤8MB）</div>
+        <input type="file" id="refVidInput" accept="video/mp4,video/quicktime" multiple hidden />
+        <div class="thumbs" id="refVids"></div>
+
+        <label class="f">参考音频 <span id="refAudCount" style="color:var(--sub)">0/3</span></label>
+        <div class="drop" id="refAudDrop">点击选择音频（mp3/wav，≤8MB）</div>
+        <input type="file" id="refAudInput" accept="audio/*" multiple hidden />
+        <div class="thumbs" id="refAuds"></div>
+      </div>
+
+      <div id="frameBlock" hidden>
+        <div class="pair">
+          <div>
+            <label class="f">首帧 <span id="firstHint" style="color:var(--sub)"></span></label>
+            <div class="drop" id="firstDrop">点击选择首帧图</div>
+            <input type="file" id="firstInput" accept="image/*" hidden />
+            <div class="thumbs" id="firstThumb"></div>
+          </div>
+          <div id="lastWrap" hidden>
+            <label class="f">尾帧</label>
+            <div class="drop" id="lastDrop">点击选择尾帧图</div>
+            <input type="file" id="lastInput" accept="image/*" hidden />
+            <div class="thumbs" id="lastThumb"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="row3">
         <div><label class="f">模型</label><select id="model"></select></div>
         <div><label class="f">时长(秒)</label><input id="duration" type="number" min="4" max="15" value="5" /></div>
-        <div><label class="f">清晰度</label><select id="resolution"><option value="768p">768P</option></select></div>
+        <div id="resField"><label class="f">清晰度</label><select id="resolution"><option value="768p">768P</option></select></div>
       </div>
       <div class="row">
         <div><label class="f">画幅</label>
@@ -270,6 +329,8 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let STATE = { accounts: [], tasks: [], log: [], queue: {}, models: [], limits: {} };
+let VEDA = null; // /api/veda/state 的快照（仅切换来源时拉取）
+let SOURCE = localStorage.getItem("fs.source") || "paba";
 let activeAccount = localStorage.getItem("fs.account") || "";
 
 function toast(msg, err = false) {
@@ -366,6 +427,26 @@ function renderAccounts() {
   }
 }
 
+const VEDA_DURATIONS = [5, 10, 15];
+const VEDA_ASPECTS = ["16:9", "9:16", "4:3", "1:1"];
+const PABA_ASPECTS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
+const STAGE_TEXT = {
+  pending_pe: "编写脚本", enhancing: "增强提示词", queued: "排队中", dispatched: "预热 GPU",
+  referencing: "读参考", encoding: "读提示词", denoising: "生成中", decoding: "冲印中",
+  done: "已完成", failed: "失败", cancelled: "已取消",
+};
+
+function setSource(src) {
+  SOURCE = src;
+  localStorage.setItem("fs.source", src);
+  document.querySelectorAll("#sourceSeg button").forEach((b) => b.classList.toggle("on", b.dataset.src === src));
+  $("pabaFields").hidden = src !== "paba";
+  // 先按来源把表单切好，别等上游额度回来（网络慢时表单会卡在旧状态）
+  renderForm(); renderQuota();
+  if (src === "veda") refreshVeda().then(() => { renderQuota(); });
+}
+document.querySelectorAll("#sourceSeg button").forEach((b) => { b.onclick = () => setSource(b.dataset.src); });
+
 function renderForm() {
   const sel = $("account");
   const list = STATE.accounts.filter((a) => a.status !== "removed" && !a.disabled);
@@ -379,15 +460,65 @@ function renderForm() {
   else if (list[0]) { activeAccount = list[0].id; sel.value = activeAccount; }
   sel.onchange = () => { activeAccount = sel.value; localStorage.setItem("fs.account", activeAccount); renderAccounts(); renderQuota(); };
 
-  const m = $("model");
-  const models = STATE.models || [];
-  m.innerHTML = models.map((x) => `<option value="${x.id}">${x.label} · 免费</option>`).join("");
+  const m = $("model"), r = $("ratio"), d = $("duration");
+  $("resField").hidden = SOURCE === "veda"; // Veda 只有 768p 档，画幅决定像素
+  if (SOURCE === "veda") {
+    m.innerHTML = `<option value="minimax-h3-veda">MiniMax-H3 · Veda 稀疏注意力</option>`;
+    r.innerHTML = VEDA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
+    if (!VEDA_ASPECTS.includes(r.value)) r.value = "9:16";
+    d.min = 5; d.max = 15; d.step = 5;
+    if (!VEDA_DURATIONS.includes(Number(d.value))) d.value = 5;
+    $("prompt").placeholder = "把心里那句话写下来就行（≥32 字），服务会自动补成上游要求的三段式：画面 / 环境声 / 配乐。也可以手写 integrated_multimodal_description: …";
+  } else {
+    const models = STATE.models || [];
+    m.innerHTML = models.map((x) => `<option value="${x.id}">${x.label} · 免费</option>`).join("");
+    r.innerHTML = PABA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
+    d.min = 4; d.max = 15; d.step = 1;
+    $("prompt").placeholder = "描述画面、动作、镜头和声音，例如：少女立于朱红门廊前，鎏金唐装，镜头缓慢推近，宫灯流转……";
+  }
+  // 参考素材只对 paba 源有效（Veda 侧没有这套字段）
+  const showRef = SOURCE !== "veda";
+  $("modesLabel").hidden = !showRef;
+  $("modes").hidden = !showRef;
+  if (showRef) {
+    renderModes();
+  } else {
+    $("refBlock").hidden = true;
+    $("frameBlock").hidden = true;
+  }
   renderQuota();
 }
 
 function renderQuota() {
-  const a = acctById($("account").value);
   const line = $("quotaLine");
+  if (SOURCE === "veda") {
+    const v = VEDA || {};
+    const q = v.quota;
+    if (!q) {
+      line.innerHTML = `<span>${v.error ? "Veda 不可达：" + v.error : "正在读取 Veda 额度…"}</span>`;
+      $("btnGen").disabled = true;
+      $("genHint").textContent = v.error ? "检查网络后点「同步全部」重试。" : "";
+      return;
+    }
+    const used = q.used ?? 0, limit = q.limit ?? 20, left = q.remaining ?? Math.max(0, limit - used);
+    const pct = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+    const reset = q.resetsAt ? new Date(q.resetsAt).toLocaleString("zh-CN", { hour12: false }) : "-";
+    const netUsed = v.local?.submittedToday ?? 0, netLimit = v.local?.networkDailyLimit ?? 30;
+    line.innerHTML = `<span>Veda <b>${left}</b>/${limit} credit · 本机今日 ${netUsed}/${netLimit} 条 · 在途 ${v.local?.active ?? 0}</span>
+      <span class="track"><i class="${left === 0 ? "full" : ""}" style="width:${pct}%"></i></span>`;
+    const blocked = left <= 0 || netUsed >= netLimit || v.config?.turnstile;
+    $("btnGen").disabled = blocked;
+    $("genHint").textContent = v.config?.turnstile
+      ? "上游已开启 Turnstile 人机验证，纯 HTTP 通道暂不可用。"
+      : netUsed >= netLimit
+        ? `该网络今天已提交 ${netUsed} 条，达到上游同网络上限（${netLimit} 条/天）。`
+        : left <= 0
+          ? `Veda 额度用完，${reset} 恢复（额度按出口网络计，换设备标识无效）。`
+          : `5s=1 / 10s=2 / 15s=3 credit，提交即扣；同网络 30 条/天。额度 ${reset} 恢复。`;
+    return;
+  }
+
+  const a = acctById($("account").value);
   if (!a) { line.innerHTML = "<span>无可用账号，先在账号池授权</span>"; $("btnGen").disabled = true; return; }
   const used = a.usage?.consumed ?? 0;
   const limit = a.usage?.limit ?? STATE.limits.freeDailyLimit ?? 15;
@@ -431,6 +562,7 @@ function renderTasks() {
   for (const t of tasks.slice(0, 120)) {
     const el = document.createElement("div");
     el.className = "task";
+    const isVeda = t.provider === "veda" || t.accountId === "veda";
     const localUrl = t.asset?.video ? "/assets/" + t.asset.video.split("/assets/")[1] : "";
     const thumb = localUrl.replace(/\.mp4$/, ".jpg");
     let media;
@@ -439,29 +571,36 @@ function renderTasks() {
     } else if (t.video?.thumb_url) {
       media = `<img src="${t.video.thumb_url}" alt="" /><span class="badge qpos">待镜像</span>`;
     } else {
+      const stage = STAGE_TEXT[t.stage] || (t.stage ? t.stage : "");
+      const step = t.step && t.stepsTotal ? ` ${t.step}/${t.stepsTotal}` : "";
       const pos = t.queuePosition ? `队列第 ${t.queuePosition} 位` : "排队中";
-      media = `<div class="ph">${t.status === "done" ? "成片待同步" : pos}<br/><span style="opacity:.6">免费队列较慢</span></div>`;
+      media = `<div class="ph">${t.status === "done" ? "成片待同步" : (stage ? stage + step : pos)}<br/><span style="opacity:.6">${isVeda ? "单卡 RTX 4090 · 2 槽位" : "免费队列较慢"}</span></div>`;
     }
     const acct = acctById(t.accountId);
+    const badge = t.status === "pending" ? "排队" : t.status;
     el.innerHTML = `
-      <div class="media"><span class="badge ${t.status}">${t.status === "pending" ? "排队" : t.status}</span>${media}</div>
+      <div class="media"><span class="badge ${t.status}">${isVeda ? (STAGE_TEXT[t.stage] || badge) : badge}</span>${media}</div>
       <div class="info">
         <div class="p" title="${(t.prompt || "").replace(/"/g, "&quot;")}">${t.prompt || "(无提示词)"}</div>
         <div class="tags">
-          <span>${acct ? acct.label : t.accountId}</span>
-          <span>${t.duration || "-"}s</span><span>${t.resolution || "-"}</span>
-          ${t.billing?.free ? "<span>免费</span>" : ""}
-          <span>${fmtTime(t.upstreamCreatedAt)}</span>
+          <span class="src ${isVeda ? "veda" : ""}">${isVeda ? "VEDA" : "PABA"}</span>
+          <span>${acct ? acct.label : (isVeda ? "免账号" : t.accountId)}</span>
+          <span>${t.duration || "-"}s</span><span>${t.resolution || t.aspectRatio || "-"}</span>
+          ${t.billing?.free || isVeda ? "<span>免费</span>" : ""}
+          <span>${fmtTime(t.upstreamCreatedAt || t.createdAt)}</span>
         </div>
       </div>
       <div class="foot">
         <button data-op="copy">复用提示词</button>
         <button data-op="play">${localUrl ? "打开文件" : "上游查看"}</button>
-        <button data-op="del">删除</button>
+        ${isVeda
+          ? (["done", "failed", "cancelled"].includes(t.status) ? "" : `<button data-op="cancel">取消</button>`)
+          : `<button data-op="del">删除</button>`}
       </div>`;
     el.querySelector('[data-op="copy"]').onclick = () => {
       $("prompt").value = t.prompt || "";
       $("duration").value = t.duration || 5;
+      if (isVeda) { setSource("veda"); return window.scrollTo({ top: 0, behavior: "smooth" }); }
       if (acctById(t.accountId) && !acctById(t.accountId).disabled) {
         activeAccount = t.accountId; $("account").value = t.accountId; renderQuota(); renderAccounts();
       }
@@ -469,9 +608,17 @@ function renderTasks() {
     };
     el.querySelector('[data-op="play"]').onclick = () => {
       if (localUrl) window.open(localUrl, "_blank");
+      else if (isVeda) window.open("https://veda.hanxiao.run/#/job/" + encodeURIComponent(t.upstreamId), "_blank");
       else window.open("https://www.paba.tv/v1/videos/" + t.upstreamId + "/content", "_blank");
     };
-    el.querySelector('[data-op="del"]').onclick = async () => {
+    const cancelBtn = el.querySelector('[data-op="cancel"]');
+    if (cancelBtn) cancelBtn.onclick = async () => {
+      if (!confirm("取消这条 Veda 任务？已扣的 credit 不会退还。")) return;
+      try { await api(`/api/veda/jobs/${encodeURIComponent(t.upstreamId)}/cancel`, { method: "POST" }); toast("已取消"); await refresh(); }
+      catch (e) { toast(e.message, true); }
+    };
+    const delBtn = el.querySelector('[data-op="del"]');
+    if (delBtn) delBtn.onclick = async () => {
       if (!confirm("从上游删除这条记录？本地已下载的成片会保留。")) return;
       try { await api(`/api/tasks/${t.accountId}/${t.upstreamId}`, { method: "DELETE" }); toast("已删除"); await refresh(); }
       catch (e) { toast(e.message, true); }
@@ -489,18 +636,32 @@ function renderLog() {
 function renderSyncInfo() {
   const online = STATE.accounts.filter((a) => a.status === "online" && !a.disabled);
   const last = Math.max(0, ...STATE.accounts.map((a) => a.lastSyncAt || 0));
+  const vedaLabel = SOURCE === "veda" ? " · Veda" : "";
   $("syncinfo").textContent = last
-    ? `上次同步 ${new Date(last).toLocaleTimeString("zh-CN", { hour12: false })} · 在线 ${online.length}`
-    : `在线 ${online.length}`;
-  if (STATE.siteEntry) $("siteEntry").href = STATE.siteEntry;
+    ? `上次同步 ${new Date(last).toLocaleTimeString("zh-CN", { hour12: false })} · 在线 ${online.length}${vedaLabel}`
+    : `在线 ${online.length}${vedaLabel}`;
+  if (SOURCE === "veda") {
+    $("siteEntry").href = VEDA?.entryPage || "https://veda.hanxiao.run/";
+    $("siteEntry").textContent = "打开 Veda ↗";
+  } else if (STATE.siteEntry) {
+    $("siteEntry").href = STATE.siteEntry;
+    $("siteEntry").textContent = "打开原站 ↗";
+  }
 }
 
 function renderAll() {
   renderAccounts(); renderForm(); renderQueue(); renderTasks(); renderLog(); renderSyncInfo();
 }
 
+async function refreshVeda() {
+  try { VEDA = await api("/api/veda/state"); }
+  catch (e) { VEDA = { ok: false, error: e.message }; }
+  return VEDA;
+}
+
 async function refresh() {
   STATE = await api("/api/state");
+  if (SOURCE === "veda") await refreshVeda();
   renderAll();
 }
 
@@ -510,32 +671,60 @@ $("btnGen").onclick = async () => {
   const btn = $("btnGen");
   btn.disabled = true; btn.textContent = "提交中…";
   try {
-    const out = await api("/api/generate", {
-      method: "POST",
-      body: JSON.stringify({
-        accountId: $("account").value || undefined,
-        prompt,
-        model: $("model").value,
-        duration: Number($("duration").value),
-        resolution: $("resolution").value,
-        aspectRatio: $("ratio").value,
-        seed: $("seed").value || undefined,
-      }),
-    });
-    toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : "已提交 " + out.upstreamId);
+    if (SOURCE === "veda") {
+      const out = await api("/api/veda/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          duration: Number($("duration").value),
+          aspect: $("ratio").value,
+          seed: $("seed").value || undefined,
+        }),
+      });
+      const q = out.quota || {};
+      toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : `已提交 ${out.upstreamId} · 剩余 ${q.remaining ?? "?"} credit`);
+    } else {
+      const out = await api("/api/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          accountId: $("account").value || undefined,
+          prompt,
+          model: $("model").value,
+          mode: REF.mode,
+          duration: Number($("duration").value),
+          resolution: $("resolution").value,
+          aspectRatio: $("ratio").value,
+          seed: $("seed").value || undefined,
+          referenceImages: REF.images.map((x) => x.dataUrl),
+          referenceVideos: REF.videos.map((x) => ({ data: x.dataUrl, withAudio: false })),
+          referenceAudios: REF.audios.map((x) => x.dataUrl),
+          firstFrame: REF.first?.dataUrl,
+          lastFrame: REF.last?.dataUrl,
+        }),
+      });
+      toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : "已提交 " + out.upstreamId);
+    }
     await refresh();
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; btn.textContent = "提交生成"; renderQuota(); }
 };
 
 $("btnSync").onclick = async () => {
-  const id = $("account").value;
-  try { if (id) await api(`/api/accounts/${id}/sync`, { method: "POST" }); else await api("/api/sync", { method: "POST" }); await refresh(); }
+  try {
+    if (SOURCE === "veda") { await api("/api/veda/sync", { method: "POST" }); await refresh(); toast("Veda 已对账"); return; }
+    const id = $("account").value;
+    if (id) await api(`/api/accounts/${id}/sync`, { method: "POST" }); else await api("/api/sync", { method: "POST" });
+    await refresh();
+  }
   catch (e) { toast(e.message, true); }
 };
 $("btnSyncAll").onclick = async () => {
   const b = $("btnSyncAll"); b.disabled = true; b.textContent = "同步中…";
-  try { await api("/api/sync", { method: "POST" }); await refresh(); toast("同步完成"); }
+  try {
+    await api("/api/sync", { method: "POST" });
+    await api("/api/veda/sync", { method: "POST" }).catch(() => {});
+    await refresh(); toast("同步完成");
+  }
   catch (e) { toast(e.message, true); }
   finally { b.disabled = false; b.textContent = "同步全部"; }
 };
@@ -572,7 +761,8 @@ document.querySelectorAll("#addModal .tabs button").forEach((b) => {
 
 async function createAccount(label, backend, btn, busyText) {
   const name = (label || "").trim() || `账号${STATE.accounts.length + 1}`;
-  const id = name.toLowerCase().replace(/[^\w-]/g, "-") || `acct-${Date.now().toString(36)}`;
+  let id = name.toLowerCase().replace(/[^\w-]/g, "-").replace(/^-+/, "");
+  if (!id || /^-+$/.test(id)) id = `acct-${Date.now().toString(36)}`;
   const old = btn.textContent;
   btn.disabled = true; btn.textContent = busyText;
   try {
@@ -645,6 +835,163 @@ $("addEgoGo").onclick = async () => {
   finally { btn.disabled = false; btn.textContent = "接管会话"; }
 };
 
+
+
+/* ---------- 参考素材 ---------- */
+const REF = { mode: "text", images: [], videos: [], audios: [], first: null, last: null };
+
+const modelCfg = () => (STATE.models && STATE.models[0]) || { modes: [], limits: { referenceImages: 9, referenceVideos: 3, referenceAudios: 3 } };
+
+function renderModes() {
+  const box = $("modes");
+  const modes = modelCfg().modes || [];
+  box.innerHTML = modes.map((m) => `<button data-mode="${m.id}" title="${m.hint || ""}" class="${REF.mode === m.id ? "on" : ""}">${m.label}</button>`).join("");
+  box.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => { REF.mode = b.dataset.mode; renderModes(); applyMode(); };
+  });
+  applyMode();
+}
+
+function applyMode() {
+  $("refBlock").hidden = REF.mode !== "reference";
+  $("frameBlock").hidden = !(REF.mode === "first" || REF.mode === "frames");
+  $("lastWrap").hidden = REF.mode !== "frames";
+  $("firstHint").textContent = REF.mode === "frames" ? "（必填）" : "（必填）";
+  renderThumbs();
+}
+
+function fmtKB(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.round(n / 1024) + "KB"; }
+
+function compressImage(file, maxSide = 1280, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve({ dataUrl: c.toDataURL("image/jpeg", quality), thumb: c.toDataURL("image/jpeg", 0.6), w, h });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("图片读取失败：" + file.name)); };
+    img.src = url;
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error("读取失败：" + file.name));
+    r.readAsDataURL(file);
+  });
+}
+
+function addImages(files, target) {
+  const limit = modelCfg().limits?.referenceImages ?? 9;
+  const list = target === "images" ? REF.images : [];
+  const room = limit - list.length;
+  const picked = [...files].slice(0, Math.max(0, room));
+  if (!room) return toast(`参考图最多 ${limit} 张`, true);
+  (async () => {
+    for (const f of picked) {
+      try {
+        const img = await compressImage(f);
+        if (target === "images") REF.images.push({ name: f.name, ...img });
+        else if (target === "first") REF.first = { name: f.name, ...img };
+        else REF.last = { name: f.name, ...img };
+      } catch (e) { toast(e.message, true); }
+    }
+    renderThumbs();
+  })();
+}
+
+function addMedia(files, kind) {
+  const key = kind === "video" ? "videos" : "audios";
+  const limit = kind === "video" ? (modelCfg().limits?.referenceVideos ?? 3) : (modelCfg().limits?.referenceAudios ?? 3);
+  const room = limit - REF[key].length;
+  if (room <= 0) return toast(`${kind === "video" ? "参考视频" : "参考音频"}最多 ${limit} 个`, true);
+  (async () => {
+    for (const f of [...files].slice(0, room)) {
+      if (f.size > 8 * 1024 * 1024) { toast(`${f.name} 超过 8MB，先压缩`, true); continue; }
+      try {
+        const dataUrl = await readFileAsDataUrl(f);
+        REF[key].push({ name: f.name, dataUrl, size: f.size, duration: null });
+      } catch (e) { toast(e.message, true); }
+    }
+    renderThumbs();
+  })();
+}
+
+function thumbCard(item, onRemove, cap) {
+  return `<div class="thumb"><img src="${item.thumb || item.dataUrl}" alt=""><span class="x" data-x>×</span>${cap ? `<span class="cap">${cap}</span>` : ""}</div>`;
+}
+
+function renderThumbs() {
+  const limits = modelCfg().limits || {};
+  $("refImgCount").textContent = `${REF.images.length}/${limits.referenceImages ?? 9}`;
+  $("refVidCount").textContent = `${REF.videos.length}/${limits.referenceVideos ?? 3}`;
+  $("refAudCount").textContent = `${REF.audios.length}/${limits.referenceAudios ?? 3}`;
+
+  const imgBox = $("refImgs");
+  imgBox.innerHTML = "";
+  REF.images.forEach((it, i) => {
+    const d = document.createElement("div");
+    d.innerHTML = thumbCard(it, null, fmtKB(it.dataUrl.length));
+    d.querySelector("[data-x]").onclick = () => { REF.images.splice(i, 1); renderThumbs(); };
+    imgBox.appendChild(d.firstElementChild);
+  });
+
+  const vidBox = $("refVids");
+  vidBox.innerHTML = "";
+  REF.videos.forEach((it, i) => {
+    const d = document.createElement("div");
+    d.innerHTML = `<div class="thumb"><video src="${it.dataUrl}" muted></video><span class="x">×</span><span class="cap">${fmtKB(it.size)}</span></div>`;
+    d.querySelector("[data-x]").onclick = () => { REF.videos.splice(i, 1); renderThumbs(); };
+    vidBox.appendChild(d.firstElementChild);
+  });
+
+  const audBox = $("refAuds");
+  audBox.innerHTML = "";
+  REF.audios.forEach((it, i) => {
+    const d = document.createElement("div");
+    d.innerHTML = `<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:18px">♪<span class="x">×</span><span class="cap">${fmtKB(it.size)}</span></div>`;
+    d.querySelector("[data-x]").onclick = () => { REF.audios.splice(i, 1); renderThumbs(); };
+    audBox.appendChild(d.firstElementChild);
+  });
+
+  for (const [key, boxId] of [["first", "firstThumb"], ["last", "lastThumb"]]) {
+    const box = $(boxId);
+    box.innerHTML = "";
+    const it = REF[key];
+    if (!it) continue;
+    const d = document.createElement("div");
+    d.innerHTML = thumbCard(it, null, fmtKB(it.dataUrl.length));
+    d.querySelector("[data-x]").onclick = () => { REF[key] = null; renderThumbs(); };
+    box.appendChild(d.firstElementChild);
+  }
+}
+
+function bindDrop(dropId, inputId, handler) {
+  const drop = $(dropId), input = $(inputId);
+  drop.onclick = () => input.click();
+  input.onchange = () => { handler(input.files); input.value = ""; };
+  drop.ondragover = (e) => { e.preventDefault(); drop.style.borderColor = "var(--brand)"; };
+  drop.ondragleave = () => { drop.style.borderColor = ""; };
+  drop.ondrop = (e) => {
+    e.preventDefault(); drop.style.borderColor = "";
+    handler(e.dataTransfer.files);
+  };
+}
+
+bindDrop("refImgDrop", "refImgInput", (f) => addImages(f, "images"));
+bindDrop("refVidDrop", "refVidInput", (f) => addMedia(f, "video"));
+bindDrop("refAudDrop", "refAudInput", (f) => addMedia(f, "audio"));
+bindDrop("firstDrop", "firstInput", (f) => addImages(f, "first"));
+bindDrop("lastDrop", "lastInput", (f) => addImages(f, "last"));
 
 /* ---------- 编辑账号 ---------- */
 const editModal = $("editModal");
@@ -759,6 +1106,11 @@ function connect() {
   es.addEventListener("login", (e) => { if (JSON.parse(e.data).phase === "ok") toast("账号授权成功"); });
   es.addEventListener("log", () => refresh());
 }
+
+document.querySelectorAll("#sourceSeg button").forEach((b) => {
+  b.classList.toggle("on", b.dataset.src === SOURCE);
+});
+$("pabaFields").hidden = SOURCE !== "paba";
 
 refresh().then(connect).catch((e) => toast("加载失败：" + e.message, true));
 setInterval(refresh, 15000);

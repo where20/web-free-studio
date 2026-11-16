@@ -19,6 +19,24 @@ export const UPSTREAM = {
   contentHost: "https://media.paba.tv",
 };
 
+/**
+ * 第二个上游：Veda Studio（免账号，纯 HTTP 通道）。
+ * 额度以 /api/quota 实时读数为准；下面是兜底默认值与本地闸门参数。
+ */
+export const VEDA = {
+  origin: "https://veda.hanxiao.run",
+  entryPage: "https://veda.hanxiao.run/",
+  // 用一个伪账号 id 分组任务与在途统计，避免和 Paba 的账号池混在一起
+  accountId: "veda",
+  dailyCreditsFallback: 20,
+  // i18n 明确声明：同一网络每天最多 30 条视频（与设备数无关）
+  networkDailyVideos: 30,
+  // 单机两卡，堆太多只会一起变慢；超过就拒绝，提示等出片
+  maxActive: Number(process.env.VEDA_MAX_ACTIVE || 4),
+  pollActiveMs: Number(process.env.VEDA_POLL_MS || 8_000),
+  pollIdleMs: Number(process.env.VEDA_POLL_IDLE_MS || 60_000),
+};
+
 export const RUNTIME = {
   port: Number(process.env.PORT || 8790),
   headless: process.env.HEADED === "1" ? false : true,
@@ -47,7 +65,19 @@ export const FREE_MODELS = {
     label: "MiniMax H3 Flash",
     note: "免费档 · 每天 15 次 · 普通排队",
     resolutions: ["768p"],
+    minDuration: 4,
     maxDuration: 15,
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
+    // 与上游 /v1/models 的 modes 对齐
+    modes: [
+      { id: "text", label: "文生视频", hint: "只用提示词" },
+      { id: "reference", label: "全能参考", hint: "参考图 / 参考视频 / 参考音频任意组合" },
+      { id: "first", label: "图生视频", hint: "给一张首帧图" },
+      { id: "frames", label: "首尾帧", hint: "给首帧 + 尾帧，补中间过程" },
+    ],
+    // 上游 limits：reference 9 / motion 3 / sound 3
+    limits: { referenceImages: 9, referenceVideos: 3, referenceAudios: 3 },
+    maxDataUrlBytes: 8 * 1024 * 1024,
   },
 };
 

@@ -20,6 +20,7 @@ import {
   logEvent,
 } from "./store.mjs";
 import { laneFor, ChallengeError, AuthError, UpstreamError } from "./lane.mjs";
+import { readCookies } from "./cookies.mjs";
 import { emit } from "./events.mjs";
 
 const jobs = new Map();
@@ -89,6 +90,10 @@ export async function precheck({ accountId, payload }) {
     throw bad(`账号 ${account.label} 当前状态 ${account.status}，先授权/验证再提交`);
   }
   if (account) {
+    // 没有登录态的账号不能提交，否则会借用浏览器里别人的会话（串号）
+    if ((account.backend || "ego") !== "chrome" && !(await readCookies(account.id)).length) {
+      throw bad(`账号 ${account.label} 还没有登录态，先在「编辑」里粘贴 Cookie 或用密码登录`);
+    }
     const usage = await getUsage(account.id);
     if (consumedOf(usage) >= RUNTIME.freeDailyLimit) {
       throw bad(`账号 ${account.label} 今日免费额度已用完（${consumedOf(usage)}/${RUNTIME.freeDailyLimit}）`);
@@ -264,6 +269,7 @@ export async function pickAccountId() {
   if (!accounts.length) throw new Error("没有可用账号，请先授权");
   const scored = [];
   for (const a of accounts) {
+    if ((a.backend || "ego") !== "chrome" && !(await readCookies(a.id)).length) continue;
     const usage = await getUsage(a.id);
     const active = await countActive(a.id);
     if (consumedOf(usage) >= RUNTIME.freeDailyLimit) continue;

@@ -1,9 +1,10 @@
 # web-free-studio · 本机视频生成工作台
 
-把 `www.paba.tv` 的视频生成能力落到本机：**多账号池、免费额度按消耗计账、提交排队、成片自动回本地**。
+把 **两个免费上游** 的视频生成能力落到本机：`www.paba.tv`（账号池）与 `veda.hanxiao.run`（免账号）。
+统一任务库、统一资产归档、统一工作台。
 
-> 逆向分析与接口证据见 [`.analysis/REA-REPORT.md`](./.analysis/REA-REPORT.md)。
-> 本项目**不复制上游任何代码与界面**，只是「自己账号的本地客户端 + 产物归档器」。
+> 逆向分析与接口证据见 [`.analysis/REA-REPORT.md`](./.analysis/REA-REPORT.md)（Paba）与 [`.analysis/REA-VEDA.md`](./.analysis/REA-VEDA.md)（Veda）。
+> 本项目**不复制上游任何代码与界面**，只是「自己账号/设备的本地客户端 + 产物归档器」。
 
 ---
 
@@ -20,7 +21,33 @@
 
 ---
 
-## 为什么必须走浏览器通道
+## 第二个上游 · Veda Studio（免账号）
+
+工作台左上「来源」切到 **Veda Studio · 免账号** 即可用。它是 Veda 稀疏注意力 + MiniMax-H3 的研究预览（单机 2×RTX 4090），**不需要登录**，纯 HTTP 通道，不用开浏览器。
+
+| 能力 | 说明 |
+|------|------|
+| **免账号** | 身份 = 服务端下发的 `veda_did` + `X-Device-Id`，落在 `data/veda.device.json`（0600） |
+| **三段式 prompt 自动补全** | 上游强制 `integrated_multimodal_description:` / `overall_soundscape:` / `non_diegetic_music:`；只写一句中文描述也行，缺的字段按默认补 |
+| **额度双闸** | 20 credits/天（5s=1 / 10s=2 / 15s=3，**按出口网络计**）+ 同网络 30 条/天，提交前现拉 `/api/quota` 拦 |
+| **在途闸** | 默认最多 4 条（上游 2 个 GPU 槽位，超出排队不拒绝，但会一起变慢） |
+| **产物回本地** | `data/assets/<日期>/veda-<jobId>.mp4`，工作台内直接播 |
+| **前进式同步** | 上游**没有列表接口**，只能靠本地存的 `job_id` 跟进；历史无法回溯 |
+
+| 参数 | 值 |
+|------|-----|
+| 时长 | 5s / 10s / 15s（1 / 2 / 3 credit） |
+| 画幅 | 16:9（1344×768）、9:16（768×1344）、4:3（1024×768）、1:1（768×768） |
+| prompt | ≥32 字符，raw 上限 8000；`enhance` 模式走上游扩写，上限 2000 |
+| 实测耗时 | 5s/9:16 = 排队 ~3 分钟 + 生成 ~2.7 分钟 ≈ **5 分 44 秒** |
+| 参考图 | 上游当前 `refs.enabled=false`，只能文生视频（带声） |
+
+> **额度是按出口 IP 计的**，不是按设备：换 cookie / 换设备 id 实测都不刷新额度（见 REA-VEDA.md §4）。
+> 本项目**不做**代理池轮换、设备指纹伪造这类绕过，只在上游给的额度内排队使用。
+
+---
+
+## 为什么 Paba 必须走浏览器通道
 
 实测同一份 Cookie：
 
@@ -143,6 +170,20 @@ curl -s --noproxy '*' http://localhost:8790/api/queue                  # 队列�
 curl -N --noproxy '*' http://localhost:8790/api/events                 # SSE
 ```
 
+### Veda 专用接口
+
+```bash
+curl -s --noproxy '*' http://localhost:8790/api/veda/state             # 额度 + 能力 + 排队
+
+# 提交（prompt 只写一句中文也行，服务自动补三段式）
+curl -s --noproxy '*' -X POST http://localhost:8790/api/veda/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"少女立于朱红门廊前，晨雾缓缓漂过红柱","duration":5,"aspect":"9:16"}'
+
+curl -s --noproxy '*' -X POST http://localhost:8790/api/veda/sync      # 对账 + 镜像产物
+curl -s --noproxy '*' -X POST http://localhost:8790/api/veda/jobs/<jobId>/cancel
+```
+
 > 本机 `http_proxy` 会干扰 `curl 127.0.0.1`，加 `--noproxy '*'` 或用 `localhost`。
 
 ---
@@ -152,9 +193,11 @@ curl -N --noproxy '*' http://localhost:8790/api/events                 # SSE
 ```
 data/
 ├─ db.json                       # accounts / tasks / usage / log（原子写）
+├─ veda.device.json              # Veda 设备态（cookie + device id，0600）
 ├─ profiles/<accountId>/         # 每账号独立 Chrome profile
 └─ assets/<YYYY-MM-DD>/
-   ├─ <taskId>.mp4               # 成片
+   ├─ <taskId>.mp4               # 成片（paba）
+   ├─ veda-<jobId>.mp4           # 成片（veda）
    ├─ <taskId>.jpg               # 缩略图
    └─ <taskId>.json              # 上游原始任务 JSON
 ```
@@ -175,3 +218,9 @@ data/
 | 启动报「端口已被占用」 | 本地库是多进程共享文件，**只能跑一个实例**；先停旧实例再启动 |
 | 无头下验证过不去 | 人机验证需可见窗口，`challenge` 会自动切有头模式 |
 | Chrome 起不来 | 设 `CHROME_PATH`，或 `LANE=ego` 改用 ego 浏览器 |
+| Veda：`quota_exhausted`（429） | 今日 20 credit 用完，按 `resets_at` 等（+24h 滚动窗口）。额度按出口 IP 计，换设备/清 cookie 都无效 |
+| Veda：`quota_network`（429） | 同一网络今天已提交 30 条，触及上游网络上限，等重置 |
+| Veda：`invalid_prompt` | 上游要求三段式。正常提交不会遇到（服务自动补），只有手写 `raw` 又漏字段才会 |
+| Veda：画面描述太短 | ≥32 字符（按你写的原文算，不是补全后的） |
+| Veda：`challenge_required` | 上游开了 Turnstile，纯 HTTP 通道不可用，需等其关闭或改走浏览器通道 |
+| Veda：偶发 `连不上 Veda: UND_ERR_CONNECT_TIMEOUT` | Cloudflare 各节点质量不均；GET 已自动退避重试 3 次，持续失败看本机网络/代理 |

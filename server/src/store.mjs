@@ -114,10 +114,11 @@ export async function upsertTask(task) {
   });
 }
 
-export async function listTasks({ accountId, limit = 200 } = {}) {
+export async function listTasks({ accountId, provider, limit = 200 } = {}) {
   const db = await load();
   let rows = db.tasks;
   if (accountId) rows = rows.filter((t) => t.accountId === accountId);
+  if (provider) rows = rows.filter((t) => (t.provider || "paba") === provider);
   return rows
     .slice()
     .sort((a, b) => (b.upstreamCreatedAt || b.createdAt) - (a.upstreamCreatedAt || a.createdAt))

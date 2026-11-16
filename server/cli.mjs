@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import process from "node:process";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { chromePath, RUNTIME, DATA_DIR, ASSET_DIR } from "./src/config.mjs";
 import { listAccounts, upsertAccount, logEvent, load, getUsage } from "./src/store.mjs";
 import { loginAccount, syncOne, solveChallengeFor, generate, startServer, seedCookies } from "./src/api.mjs";
 import { startScheduler, syncAll } from "./src/sync.mjs";
+import { startVedaScheduler } from "./src/veda-service.mjs";
 import { stopAll } from "./src/chrome.mjs";
 
 const argv = process.argv.slice(2);
@@ -88,13 +90,27 @@ async function main() {
       return doctor();
 
     case "serve": {
+      // 本地库是单文件，多个实例会互相覆盖；用 pid 锁挡住
+      const lockFile = path.join(DATA_DIR, ".server.lock");
+      try {
+        const prev = JSON.parse(await fs.readFile(lockFile, "utf8"));
+        let alive = false;
+        try { process.kill(prev.pid, 0); alive = true; } catch {}
+        if (alive) {
+          console.error(`✖ 已有实例在运行（pid ${prev.pid}，端口 ${prev.port}）。先停掉它再启动。`);
+          process.exit(1);
+        }
+      } catch {}
+      await fs.writeFile(lockFile, JSON.stringify({ pid: process.pid, port: RUNTIME.port, at: Date.now() }));
       const server = await startServer();
       const stopScheduler = startScheduler();
+      const stopVeda = startVedaScheduler();
       console.log(`▶ 本地工作台  http://localhost:${RUNTIME.port}`);
       console.log(`▶ SSE 事件    http://localhost:${RUNTIME.port}/api/events`);
       const shutdown = async () => {
         console.log("\n… 收尾中");
         stopScheduler();
+        stopVeda();
         server.close();
         await stopAll();
         process.exit(0);

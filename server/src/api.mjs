@@ -26,6 +26,7 @@ import { getBrowser, stopBrowser } from "./chrome.mjs";
 import { syncAccount, syncAll } from "./sync.mjs";
 import { addClient, emit } from "./events.mjs";
 import { Page, sleep } from "./cdp.mjs";
+import { vedaOverview, vedaGenerate, vedaSyncAll, vedaCancelJob } from "./veda-service.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -85,24 +86,71 @@ function accountView(a) {
   return rest;
 }
 
+const bad = (msg) => Object.assign(new Error(msg), { code: "validation" });
+
+const isDataUrl = (v) => typeof v === "string" && /^data:[a-z0-9.+/-]+;base64,/i.test(v);
+
+/**
+ * 组装提交体。参考素材（参考图/视频/音频、首帧/尾帧）都是 data URL，
+ * 与上游前端一致；模式校验在本地先做一遍，避免白扣一次额度。
+ */
 export function buildVideoPayload(input) {
+  const model = FREE_MODELS[input.model] ? input.model : "minimax-h3-flash";
+  const cfg = FREE_MODELS[model];
+  const mode = ["text", "reference", "first", "frames"].includes(input.mode) ? input.mode : "text";
+  const prompt = String(input.prompt || "").trim();
+
+  const refImages = (input.referenceImages || []).filter(isDataUrl);
+  const refVideos = (input.referenceVideos || []).filter((v) => v && isDataUrl(v.data));
+  const refAudios = (input.referenceAudios || []).filter(isDataUrl);
+  const firstFrame = isDataUrl(input.firstFrame) ? input.firstFrame : null;
+  const lastFrame = isDataUrl(input.lastFrame) ? input.lastFrame : null;
+
+  const hasRef = refImages.length || refVideos.length || refAudios.length;
+  if (mode === "reference" && !hasRef) throw bad("全能参考至少要接一个参考图 / 参考视频 / 参考音频");
+  if (mode === "first" && !firstFrame) throw bad("图生视频需要一张首帧图片");
+  if (mode === "frames" && (!firstFrame || !lastFrame)) throw bad("首尾帧需要首帧和尾帧两张图片");
+  if (mode === "text" && (hasRef || firstFrame || lastFrame)) {
+    throw bad("文生视频不使用参考素材，请切到「全能参考」或「图生视频」");
+  }
+  if (refImages.length > cfg.limits.referenceImages) throw bad(`参考图最多 ${cfg.limits.referenceImages} 张`);
+  if (refVideos.length > cfg.limits.referenceVideos) throw bad(`参考视频最多 ${cfg.limits.referenceVideos} 个`);
+  if (refAudios.length > cfg.limits.referenceAudios) throw bad(`参考音频最多 ${cfg.limits.referenceAudios} 个`);
+
+  const totalBytes = [...refImages, ...refVideos.map((v) => v.data), ...refAudios, firstFrame, lastFrame]
+    .filter(Boolean)
+    .reduce((sum, v) => sum + v.length, 0);
+  if (totalBytes > 24 * 1024 * 1024) throw bad("参考素材总大小超过 24MB，先压缩或减少数量");
+
+  const duration = Math.min(cfg.maxDuration, Math.max(cfg.minDuration, Number(input.duration || 5)));
   const body = {
     channel_id: input.channelId || "",
-    model: input.model || "minimax-h3-flash",
+    model,
     model_v: 2,
-    prompt: String(input.prompt || "").trim(),
-    duration: Number(input.duration || 5),
-    resolution: input.resolution || "768p",
+    prompt,
+    duration,
+    resolution: input.resolution || cfg.resolutions[0],
     aspect_ratio: input.aspectRatio || "16:9",
   };
   if (input.tier) body.tier = input.tier;
   if (input.style) body.style = input.style;
   if (Number.isFinite(Number(input.seed))) body.seed = Number(input.seed);
-  if (Array.isArray(input.referenceImages) && input.referenceImages.length) {
-    body.reference_images = input.referenceImages;
+
+  if (mode === "first") body.first_frame = firstFrame;
+  else if (mode === "frames") {
+    body.first_frame = firstFrame;
+    body.last_frame = lastFrame;
+  } else if (mode === "reference") {
+    if (refImages.length) body.reference_images = refImages;
+    if (refVideos.length) {
+      body.reference_videos = refVideos.map((v) => ({
+        data: v.data,
+        with_audio: Boolean(v.withAudio),
+        ...(v.duration ? { duration: Number(v.duration) } : {}),
+      }));
+    }
+    if (refAudios.length) body.reference_audios = refAudios;
   }
-  if (input.firstFrame) body.first_frame = input.firstFrame;
-  if (input.lastFrame) body.last_frame = input.lastFrame;
   return body;
 }
 
@@ -237,8 +285,6 @@ export async function syncOne(accountId) {
  * 导入已有登录态：把 h3v / h3s / __Host-h3d 等 cookie 注入该账号专属 profile。
  * 适合「浏览器里已经登录过」的账号迁移，避免再走一次 OAuth。
  */
-const bad = (msg) => Object.assign(new Error(msg), { code: "validation" });
-
 /** 手动导入 cookie：直接落盘 + 通过车道校验，不依赖本机 Chrome */
 export async function seedCookies(accountId, cookies) {
   const account = await getAccount(accountId);
@@ -426,7 +472,12 @@ export function createServer() {
             id: m.id,
             label: m.label,
             note: m.note,
+            modes: m.modes,
+            ratios: m.ratios,
+            resolutions: m.resolutions,
+            minDuration: m.minDuration,
             maxDuration: m.maxDuration,
+            limits: m.limits,
           })),
           limits: {
             freeDailyLimit: RUNTIME.freeDailyLimit,
@@ -441,6 +492,23 @@ export function createServer() {
       }
 
       if (p === "/api/queue") return json(res, 200, queueStats());
+
+      /* ---------- Veda Studio（免账号，纯 HTTP 通道） ---------- */
+      if (p === "/api/veda/state") return json(res, 200, await vedaOverview());
+
+      if (p === "/api/veda/generate" && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 200, await vedaGenerate(body));
+      }
+
+      if (p === "/api/veda/sync" && req.method === "POST") {
+        return json(res, 200, await vedaSyncAll());
+      }
+
+      const vedaJobMatch = p.match(/^\/api\/veda\/jobs\/([^/]+)\/cancel$/);
+      if (vedaJobMatch && req.method === "POST") {
+        return json(res, 200, await vedaCancelJob(vedaJobMatch[1]));
+      }
 
       // 兜底：用系统默认浏览器打开登录页（受控 Chrome 起不来时，人工登录 + 导出 Cookie）
       if (p === "/api/open-site") {
@@ -472,7 +540,8 @@ export function createServer() {
         if (/^\d{1,6}$/.test(label) && !body.id) {
           throw Object.assign(new Error(`备注「${label}」看起来是误填，换个能认出来的名字`), { code: "validation" });
         }
-        const id = (body.id || `acct-${Date.now().toString(36)}`).replace(/[^\w-]/g, "");
+        let id = String(body.id || "").replace(/[^\w-]/g, "").replace(/^-+|-+$/g, "");
+        if (!id) id = `acct-${Date.now().toString(36)}`;
         const backend = body.backend || process.env.LANE || "chrome";
         const account = await upsertAccount({
           id,
@@ -554,7 +623,10 @@ export function createServer() {
 
       if (p === "/api/tasks" && req.method === "GET") {
         return json(res, 200, {
-          tasks: await listTasks({ accountId: url.searchParams.get("accountId") || undefined }),
+          tasks: await listTasks({
+            accountId: url.searchParams.get("accountId") || undefined,
+            provider: url.searchParams.get("provider") || undefined,
+          }),
         });
       }
 
@@ -588,15 +660,19 @@ export function createServer() {
           ? 401
           : e instanceof ChallengeError
             ? 428
-            : e.code === "validation"
-              ? 400
-              : e.code === "too_many_pending"
-                ? 409
-                : e.code === "login_failed"
-                  ? 401
-                  : e.code === "chrome_unavailable"
-                    ? 503
-                    : 500;
+            : e.code === "challenge_required"
+              ? 428
+              : e.code === "quota_exhausted" || e.code === "quota_network"
+                ? 429
+                : e.code === "validation"
+                  ? 400
+                  : e.code === "too_many_pending"
+                    ? 409
+                    : e.code === "login_failed"
+                      ? 401
+                      : e.code === "chrome_unavailable"
+                        ? 503
+                        : 500;
       return json(res, code, { error: e.message, code: e.code || "error" });
     }
   });
