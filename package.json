@@ -13,6 +13,8 @@
     "accounts": "node server/cli.mjs account list",
     "sync": "node server/cli.mjs sync",
     "gen": "node server/cli.mjs generate",
-    "doctor": "node server/cli.mjs doctor"
+    "doctor": "node server/cli.mjs doctor",
+    "test": "node --test test/*.test.mjs",
+    "clean-wm": "node scripts/clean-watermark.mjs"
   }
 }

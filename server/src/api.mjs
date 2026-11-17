@@ -27,6 +27,7 @@ import { syncAccount, syncAll } from "./sync.mjs";
 import { addClient, emit } from "./events.mjs";
 import { Page, sleep } from "./cdp.mjs";
 import { vedaOverview, vedaGenerate, vedaSyncAll, vedaCancelJob } from "./veda-service.mjs";
+import { siftqOverview, siftqGenerate, siftqSyncAll } from "./siftq-service.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -508,6 +509,18 @@ export function createServer() {
       const vedaJobMatch = p.match(/^\/api\/veda\/jobs\/([^/]+)\/cancel$/);
       if (vedaJobMatch && req.method === "POST") {
         return json(res, 200, await vedaCancelJob(vedaJobMatch[1]));
+      }
+
+      /* ---------- SiftQ MiniMax-H3（匿名试用，图生视频，9:16） ---------- */
+      if (p === "/api/siftq/state") return json(res, 200, await siftqOverview());
+
+      if (p === "/api/siftq/generate" && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 200, await siftqGenerate(body));
+      }
+
+      if (p === "/api/siftq/sync" && req.method === "POST") {
+        return json(res, 200, await siftqSyncAll());
       }
 
       // 兜底：用系统默认浏览器打开登录页（受控 Chrome 起不来时，人工登录 + 导出 Cookie）

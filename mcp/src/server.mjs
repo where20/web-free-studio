@@ -59,7 +59,7 @@ function fail(e) {
 
   const advice = {
     daemon_offline: `先启动 daemon：cd <web-free-studio> && npm start（默认 ${baseUrl()}）`,
-    quota_exhausted: "等额度恢复（Veda 是 24 小时滚动窗口）后重试，或改用 paba 上游",
+    quota_exhausted: "等额度恢复后重试（Veda 是 24 小时滚动窗口；SiftQ 匿名 2 条/天按出口 IP 计），或改用其他上游；不要伪造标识刷额度",
     quota_network: "同网络当天提交数已达上限，等明天或换上游",
     too_many_pending: "已有在途任务，等出片再提交",
     validation: "按提示修正参数后重试",
@@ -102,9 +102,10 @@ async function withDaemon(fn) {
 
 async function toolStatus() {
   return withDaemon(async (started) => {
-    const [state, veda] = await Promise.all([
+    const [state, veda, siftq] = await Promise.all([
       get("/api/state").catch(() => null),
       get("/api/veda/state").catch(() => null),
+      get("/api/siftq/state").catch(() => null),
     ]);
 
     const out = {
@@ -149,6 +150,17 @@ async function toolStatus() {
             numGpus: veda.config?.numGpus,
           }
         : { error: "读取 Veda 状态失败" },
+      siftq: siftq
+        ? {
+            ok: siftq.ok,
+            quota: siftq.quota
+              ? { used: siftq.quota.used, limit: siftq.quota.limit, remaining: siftq.quota.remaining, source: siftq.quota.source }
+              : null,
+            local: siftq.local ?? null,
+            constraints: siftq.constraints ?? null,
+            error: siftq.error,
+          }
+        : { error: "读取 SiftQ 状态失败" },
     };
     return text(out);
   });
@@ -176,6 +188,36 @@ async function toolGenerate(args) {
         note: out.deduped
           ? "同参数刚提交过，复用了已有任务"
           : "已提交。Veda 实测 5s/9:16 约需 5–6 分钟出片，请用 wfs_task 轮询",
+      });
+    }
+
+    if (provider === "siftq") {
+      if (!args.image && !args.firstFrame) {
+        throw Object.assign(new Error("SiftQ 是图生视频，必须传 image（本地图片路径 / data URL / http(s) 链接）"), {
+          code: "validation",
+        });
+      }
+      // 本地路径转 data URL；http(s) 链接原样透传给 daemon
+      const imageRef = args.image || args.firstFrame;
+      const imageData = /^https?:\/\//i.test(imageRef)
+        ? imageRef
+        : await toDataUrl(imageRef);
+      const body = {
+        prompt: args.prompt,
+        image: imageData,
+        duration: args.duration ?? 6,
+        aspect: "9:16",
+      };
+      const out = await post("/api/siftq/generate", body);
+      return text({
+        provider: "siftq",
+        upstreamId: out.upstreamId,
+        deduped: out.deduped,
+        status: out.task?.status,
+        remaining: out.remaining,
+        note: out.deduped
+          ? "同参数刚提交过，复用了已有任务"
+          : "已提交。SiftQ 匿名 2 条/天（按出口 IP），仅 9:16；出片即镜像落盘，用 wfs_task 轮询",
       });
     }
 
@@ -244,8 +286,9 @@ async function toolTask(args) {
       return text(s);
     }
 
-    // 本地没有就尝试同步一次（Veda 前进式：主动拉一次上游）
+    // 本地没有就尝试同步一次（Veda / SiftQ 前进式：主动拉一次上游）
     await post("/api/veda/sync", {}).catch(() => {});
+    await post("/api/siftq/sync", {}).catch(() => {});
     await post("/api/sync", {}).catch(() => {});
     const again = await get(`/api/tasks`);
     const hit2 = (again.tasks || []).find((t) => t.upstreamId === id);
@@ -330,19 +373,21 @@ async function toolAccounts(args) {
 
 async function toolSync() {
   return withDaemon(async () => {
-    const [paba, veda] = await Promise.all([
+    const [paba, veda, siftq] = await Promise.all([
       post("/api/sync", {}).catch((e) => ({ error: e.message })),
       post("/api/veda/sync", {}).catch((e) => ({ error: e.message })),
+      post("/api/siftq/sync", {}).catch((e) => ({ error: e.message })),
     ]);
-    return text({ paba, veda });
+    return text({ paba, veda, siftq });
   });
 }
 
 async function toolDoctor() {
   return withDaemon(async (started) => {
-    const [state, veda] = await Promise.all([
+    const [state, veda, siftq] = await Promise.all([
       get("/api/state").catch(() => null),
       get("/api/veda/state").catch(() => null),
+      get("/api/siftq/state").catch(() => null),
     ]);
     const out = {
       daemon: { url: baseUrl(), alive: true, autoStarted: Boolean(started?.started) },
@@ -361,11 +406,18 @@ async function toolDoctor() {
         resetsAt: veda?.quota?.resetsAt ?? null,
         error: veda?.error ?? null,
       },
+      siftq: {
+        ok: siftq?.ok ?? false,
+        remaining: siftq?.quota?.remaining ?? null,
+        limit: siftq?.quota?.limit ?? null,
+        error: siftq?.error ?? null,
+      },
     };
     out.hints = [
       "Node 需要 >= 22",
       "Paba 通道需要本机 Chrome；沙箱内 spawn Chrome 可能失败，可用「导入 Cookie」方式接入",
       "Veda 通道是纯 HTTP，不依赖浏览器，但额度按出口 IP 计，换设备无效",
+      "SiftQ 匿名 2 条/天（按真实出口 IP）、仅 9:16 图生视频，30 秒内固定一个本地身份，不伪造标识不轮换额度",
       "daemon 由 MCP 适配层按需自动拉起（launchctl/crontab 在受限环境不可用）",
     ];
     return text(out);
@@ -381,9 +433,10 @@ export function createServer() {
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       instructions:
-        "web-free-studio：本机免费视频生成工作台（PabaTV 账号池 + Veda Studio 免账号）。" +
+        "web-free-studio：本机免费视频生成工作台（PabaTV 账号池 + Veda Studio 免账号 + SiftQ MiniMax-H3 图生视频）。" +
         "典型流程：wfs_status 看额度 → wfs_generate 提交 → wfs_task 轮询出片。" +
         "重要：Veda 额度按出口 IP 计且 24 小时滚动恢复；Paba 免费档单账号每天 15 条；" +
+        "SiftQ 匿名 2 条/天（按真实出口 IP）、仅 9:16、必须传输入图，不伪造标识不轮换额度。" +
         "只有 minimax-h3-flash 是免费模型，不要选付费模型。",
     },
   );
@@ -404,12 +457,14 @@ export function createServer() {
     {
       title: "提交视频生成任务",
       description:
-        "提交一条视频生成任务。provider=veda 走纯 HTTP（快、免账号，5/10/15s）；provider=paba 走账号池浏览器通道" +
+        "提交一条视频生成任务。provider=veda 走纯 HTTP（快、免账号，5/10/15s）；provider=siftq 走 MiniMax-H3 图生视频" +
+        "（必须传 image，仅 9:16，6/10/15s，匿名 2 条/天）；provider=paba 走账号池浏览器通道" +
         "（支持参考图/首尾帧，但耗时 10–40 分钟）。注意 Veda prompt 至少 32 字符。",
       inputSchema: {
-        provider: z.enum(["veda", "paba"]).default("veda").describe("上游通道，默认 veda"),
-        prompt: z.string().min(1).describe("画面描述。Veda 要求至少 32 字符；只写画面，不要写镜头术语之外的东西"),
-        duration: z.number().int().min(4).max(15).default(5).describe("时长秒数。Veda 只接受 5/10/15；Paba 4–15"),
+        provider: z.enum(["veda", "siftq", "paba"]).default("veda").describe("上游通道，默认 veda"),
+        prompt: z.string().min(1).describe("画面描述。Veda 要求至少 32 字符；SiftQ 用英文描述输入图里的动作"),
+        image: z.string().optional().describe("SiftQ 专用：输入图，本地路径 / data URL / http(s) 链接。SiftQ 必填"),
+        duration: z.number().int().min(4).max(15).default(5).describe("时长秒数。Veda 5/10/15；SiftQ 6/10/15；Paba 4–15"),
         aspect: z.string().default("16:9").describe("画幅，Veda 用：16:9 / 9:16 / 4:3 / 1:1"),
         aspectRatio: z.string().optional().describe("画幅，Paba 用：16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9"),
         seed: z.number().int().optional().describe("随机种子，给定则结果可复现"),
@@ -422,7 +477,7 @@ export function createServer() {
         referenceImages: z.array(z.string()).optional().describe(`Paba 参考图路径或 data URL，最多 9 张。${REF_HINT}`),
         referenceVideos: z.array(z.string()).optional().describe("Paba 参考视频路径或 data URL，最多 3 个"),
         referenceAudios: z.array(z.string()).optional().describe("Paba 参考音频路径或 data URL，最多 3 个"),
-        firstFrame: z.string().optional().describe("Paba 首帧图路径或 data URL"),
+        firstFrame: z.string().optional().describe("Paba 首帧图路径或 data URL；SiftQ 也可作为输入图（等价 image）"),
         lastFrame: z.string().optional().describe("Paba 尾帧图路径或 data URL"),
       },
     },
@@ -435,7 +490,7 @@ export function createServer() {
       title: "列出任务",
       description: "按 provider / accountId 过滤任务列表，返回精简后的状态、排队位、产物路径。",
       inputSchema: {
-        provider: z.enum(["paba", "veda"]).optional(),
+        provider: z.enum(["paba", "veda", "siftq"]).optional(),
         accountId: z.string().optional(),
       },
     },

@@ -6,6 +6,7 @@ data/*.local.json
 .DS_Store
 data/db.json
 data/veda.device.json
+data/siftq.device.json
 data/.server.lock
 data/daemon.log
 data/daemon.err.log

@@ -116,6 +116,9 @@
   .seg button.on{background:#fff;color:var(--brand);font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.08)}
   .src{background:#eef3ff!important;color:#2f6df6!important}
   .src.veda{background:#f3ecff!important;color:#7a45d6!important}
+  .src.siftq{background:#fff1e8!important;color:#c05621!important}
+  .filterseg{margin:0 0 0 auto;width:auto;flex:0 0 auto}
+  .filterseg button{padding:4px 12px}
 </style>
 </head>
 <body>
@@ -138,6 +141,7 @@
       <div class="seg" id="sourceSeg">
         <button data-src="paba" class="on">PabaTV · 账号池</button>
         <button data-src="veda">Veda Studio · 免账号</button>
+        <button data-src="siftq">SiftQ · H3 图生视频</button>
       </div>
       <div id="pabaFields">
         <label class="f">账号</label>
@@ -214,7 +218,15 @@
       <span class="hint" style="margin:0">每个账号独立浏览器 profile（登录态/设备态互不串号）；单账号每天 15 次、最多 2 条在途，加账号才能扩总额度与并发。</span>
     </div>
 
-    <h3 style="border-top:1px solid var(--line)">生成记录 <span class="pill" id="taskCount">0</span></h3>
+    <h3 style="border-top:1px solid var(--line);flex-wrap:wrap">
+      生成记录 <span class="pill" id="taskCount">0</span>
+      <div class="seg filterseg" id="taskFilter">
+        <button data-filter="all" class="on">全部</button>
+        <button data-filter="paba">PabaTV</button>
+        <button data-filter="veda">Veda Studio</button>
+        <button data-filter="siftq">SiftQ</button>
+      </div>
+    </h3>
     <div class="kpi" id="kpi"></div>
     <div class="body">
       <div class="tasks" id="tasks"></div>
@@ -330,8 +342,10 @@
 const $ = (id) => document.getElementById(id);
 let STATE = { accounts: [], tasks: [], log: [], queue: {}, models: [], limits: {} };
 let VEDA = null; // /api/veda/state 的快照（仅切换来源时拉取）
+let SIFTQ = null; // /api/siftq/state 的快照
 let SOURCE = localStorage.getItem("fs.source") || "paba";
 let activeAccount = localStorage.getItem("fs.account") || "";
+let TASK_FILTER = localStorage.getItem("fs.taskFilter") || "all"; // all | paba | veda | siftq
 
 function toast(msg, err = false) {
   const div = document.createElement("div");
@@ -430,6 +444,8 @@ function renderAccounts() {
 const VEDA_DURATIONS = [5, 10, 15];
 const VEDA_ASPECTS = ["16:9", "9:16", "4:3", "1:1"];
 const PABA_ASPECTS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
+const SIFTQ_DURATIONS = [6, 10, 15];
+const SIFTQ_ASPECTS = ["9:16"];
 const STAGE_TEXT = {
   pending_pe: "编写脚本", enhancing: "增强提示词", queued: "排队中", dispatched: "预热 GPU",
   referencing: "读参考", encoding: "读提示词", denoising: "生成中", decoding: "冲印中",
@@ -444,8 +460,18 @@ function setSource(src) {
   // 先按来源把表单切好，别等上游额度回来（网络慢时表单会卡在旧状态）
   renderForm(); renderQuota();
   if (src === "veda") refreshVeda().then(() => { renderQuota(); });
+  if (src === "siftq") refreshSiftq().then(() => { renderQuota(); });
 }
 document.querySelectorAll("#sourceSeg button").forEach((b) => { b.onclick = () => setSource(b.dataset.src); });
+
+// 生成记录：按平台过滤（纯前端，不重拉上游）
+function setTaskFilter(f) {
+  if (!["all", "paba", "veda", "siftq"].includes(f)) return;
+  TASK_FILTER = f;
+  localStorage.setItem("fs.taskFilter", f);
+  renderTasks();
+}
+document.querySelectorAll("#taskFilter button").forEach((b) => { b.onclick = () => setTaskFilter(b.dataset.filter); });
 
 function renderForm() {
   const sel = $("account");
@@ -461,7 +487,7 @@ function renderForm() {
   sel.onchange = () => { activeAccount = sel.value; localStorage.setItem("fs.account", activeAccount); renderAccounts(); renderQuota(); };
 
   const m = $("model"), r = $("ratio"), d = $("duration");
-  $("resField").hidden = SOURCE === "veda"; // Veda 只有 768p 档，画幅决定像素
+  $("resField").hidden = SOURCE !== "paba"; // Veda / SiftQ 都没有清晰度档，画幅/上游写死
   if (SOURCE === "veda") {
     m.innerHTML = `<option value="minimax-h3-veda">MiniMax-H3 · Veda 稀疏注意力</option>`;
     r.innerHTML = VEDA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
@@ -469,19 +495,34 @@ function renderForm() {
     d.min = 5; d.max = 15; d.step = 5;
     if (!VEDA_DURATIONS.includes(Number(d.value))) d.value = 5;
     $("prompt").placeholder = "把心里那句话写下来就行（≥32 字），服务会自动补成上游要求的三段式：画面 / 环境声 / 配乐。也可以手写 integrated_multimodal_description: …";
+  } else if (SOURCE === "siftq") {
+    m.innerHTML = `<option value="minimax-h3-siftq">MiniMax-H3 · SiftQ 图生视频</option>`;
+    r.innerHTML = SIFTQ_ASPECTS.map((a) => `<option>${a}</option>`).join("");
+    r.value = "9:16"; r.disabled = true; // 上游 showcase 通道写死竖屏
+    d.min = 6; d.max = 15; d.step = 1;
+    if (!SIFTQ_DURATIONS.includes(Number(d.value))) d.value = 6;
+    $("prompt").placeholder = "用英文描述输入图里要发生的动作，例如：The player lifts the trophy and turns to the crowd.（prompt 真实生效）";
   } else {
+    r.disabled = false;
     const models = STATE.models || [];
     m.innerHTML = models.map((x) => `<option value="${x.id}">${x.label} · 免费</option>`).join("");
     r.innerHTML = PABA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
     d.min = 4; d.max = 15; d.step = 1;
     $("prompt").placeholder = "描述画面、动作、镜头和声音，例如：少女立于朱红门廊前，鎏金唐装，镜头缓慢推近，宫灯流转……";
   }
-  // 参考素材只对 paba 源有效（Veda 侧没有这套字段）
-  const showRef = SOURCE !== "veda";
+  if (SOURCE !== "siftq") $("ratio").disabled = false;
+  // 参考素材/首尾帧只对 paba 有效；SiftQ 用「首帧」槽位当输入图
+  const showRef = SOURCE === "paba";
   $("modesLabel").hidden = !showRef;
   $("modes").hidden = !showRef;
   if (showRef) {
-    renderModes();
+    renderModes(); // 内部 applyMode() 会按 REF.mode 切 refBlock/frameBlock/lastWrap
+  } else if (SOURCE === "siftq") {
+    $("refBlock").hidden = true;
+    $("frameBlock").hidden = false;   // 显示首帧上传作为输入图
+    $("lastWrap").hidden = true;      // 不需要尾帧
+    $("firstHint").textContent = "（必填 · 输入图）";
+    $("firstDrop").textContent = "点击选择或拖入输入图（JPEG / PNG / WebP，≤20MB）";
   } else {
     $("refBlock").hidden = true;
     $("frameBlock").hidden = true;
@@ -518,6 +559,32 @@ function renderQuota() {
     return;
   }
 
+  if (SOURCE === "siftq") {
+    const s = SIFTQ || {};
+    const q = s.quota;
+    if (!q) {
+      line.innerHTML = `<span>${s.error ? "SiftQ 不可达：" + s.error : "正在读取 SiftQ 额度…"}</span>`;
+      $("btnGen").disabled = true;
+      $("genHint").textContent = s.error ? "检查网络后点「刷新记录」重试。" : "";
+      return;
+    }
+    const used = q.used ?? 0, limit = q.limit ?? 2, left = q.remaining ?? Math.max(0, limit - used);
+    const pct = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+    const active = s.local?.active ?? 0, maxActive = s.local?.maxActive ?? 2;
+    line.innerHTML = `<span>SiftQ <b>${left}</b>/${limit} 条/天 · 在途 ${active}/${maxActive}（图生视频 · 仅 9:16）</span>
+      <span class="track"><i class="${left === 0 ? "full" : ""}" style="width:${pct}%"></i></span>`;
+    const blocked = left <= 0 || active >= maxActive || !REF.first?.dataUrl;
+    $("btnGen").disabled = blocked;
+    $("genHint").textContent = left <= 0
+      ? "SiftQ 匿名额度今天已用完（按真实出口 IP 计，2 条/天）。换设备/清 cookie 无效，请等明天或改用 Veda / Paba。"
+      : active >= maxActive
+        ? "已有 2 条在生成中，等出片再提交。"
+        : !REF.first?.dataUrl
+          ? "SiftQ 是图生视频：先在下方「首帧」位置上传一张输入图（JPEG/PNG/WebP，≤20MB）。"
+          : "仅 9:16 竖屏，时长 6/10/15s；prompt 真实生效。上游任务约 1–2 天后回收，出片即镜像落盘。";
+    return;
+  }
+
   const a = acctById($("account").value);
   if (!a) { line.innerHTML = "<span>无可用账号，先在账号池授权</span>"; $("btnGen").disabled = true; return; }
   const used = a.usage?.consumed ?? 0;
@@ -544,10 +611,26 @@ function renderQueue() {
     ${lastFail ? `<span style="color:#c53030">最近失败：${(lastFail.error || "").slice(0, 40)}</span>` : ""}`;
 }
 
+const isVedaTask = (t) => t.provider === "veda" || t.accountId === "veda";
+const isSiftqTask = (t) => t.provider === "siftq" || t.accountId === "siftq";
+
 function renderTasks() {
   const box = $("tasks");
-  const tasks = STATE.tasks;
-  $("taskCount").textContent = tasks.length;
+  const all = STATE.tasks;
+  const pabaN = all.filter((t) => !isVedaTask(t) && !isSiftqTask(t)).length;
+  const vedaN = all.filter(isVedaTask).length;
+  const siftqN = all.filter(isSiftqTask).length;
+  // 过滤按钮：高亮当前项 + 各自数量
+  document.querySelectorAll("#taskFilter button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.filter === TASK_FILTER);
+    const f = b.dataset.filter;
+    const n = f === "veda" ? vedaN : f === "paba" ? pabaN : f === "siftq" ? siftqN : all.length;
+    const label = f === "all" ? "全部" : f === "paba" ? "PabaTV" : f === "veda" ? "Veda Studio" : "SiftQ";
+    b.textContent = label + ` ${n}`;
+  });
+  const tasks = TASK_FILTER === "all" ? all
+    : all.filter((t) => TASK_FILTER === "veda" ? isVedaTask(t) : TASK_FILTER === "siftq" ? isSiftqTask(t) : !isVedaTask(t) && !isSiftqTask(t));
+  $("taskCount").textContent = TASK_FILTER === "all" ? tasks.length : `${tasks.length}/${all.length}`;
   const done = tasks.filter((t) => t.status === "done");
   const local = tasks.filter((t) => t.asset?.video);
   const active = tasks.filter((t) => ["pending", "queued", "running"].includes(t.status));
@@ -558,11 +641,15 @@ function renderTasks() {
     <div><b>${local.length}</b>已落本地</div>
     <div><b>${fmtBytes(local.reduce((s, t) => s + (t.asset?.bytes || 0), 0))}</b>本地资产</div>`;
   $("empty").hidden = tasks.length > 0;
+  if (!tasks.length) $("empty").textContent = TASK_FILTER === "all"
+    ? "还没有记录。提交一条生成，或点「同步全部」拉取上游历史。"
+    : `当前没有 ${{ veda: "Veda Studio", siftq: "SiftQ", paba: "PabaTV" }[TASK_FILTER] || "该平台"} 的记录，切到「全部」查看其他平台。`;
   box.innerHTML = "";
   for (const t of tasks.slice(0, 120)) {
     const el = document.createElement("div");
     el.className = "task";
-    const isVeda = t.provider === "veda" || t.accountId === "veda";
+    const isVeda = isVedaTask(t);
+    const isSiftq = isSiftqTask(t);
     const localUrl = t.asset?.video ? "/assets/" + t.asset.video.split("/assets/")[1] : "";
     const thumb = localUrl.replace(/\.mp4$/, ".jpg");
     let media;
@@ -574,7 +661,8 @@ function renderTasks() {
       const stage = STAGE_TEXT[t.stage] || (t.stage ? t.stage : "");
       const step = t.step && t.stepsTotal ? ` ${t.step}/${t.stepsTotal}` : "";
       const pos = t.queuePosition ? `队列第 ${t.queuePosition} 位` : "排队中";
-      media = `<div class="ph">${t.status === "done" ? "成片待同步" : (stage ? stage + step : pos)}<br/><span style="opacity:.6">${isVeda ? "单卡 RTX 4090 · 2 槽位" : "免费队列较慢"}</span></div>`;
+      const sub = isVeda ? "单卡 RTX 4090 · 2 槽位" : isSiftq ? "MiniMax-H3 · 9:16" : "免费队列较慢";
+      media = `<div class="ph">${t.status === "done" ? "成片待同步" : (stage ? stage + step : pos)}<br/><span style="opacity:.6">${sub}</span></div>`;
     }
     const acct = acctById(t.accountId);
     const badge = t.status === "pending" ? "排队" : t.status;
@@ -583,10 +671,10 @@ function renderTasks() {
       <div class="info">
         <div class="p" title="${(t.prompt || "").replace(/"/g, "&quot;")}">${t.prompt || "(无提示词)"}</div>
         <div class="tags">
-          <span class="src ${isVeda ? "veda" : ""}">${isVeda ? "VEDA" : "PABA"}</span>
-          <span>${acct ? acct.label : (isVeda ? "免账号" : t.accountId)}</span>
+          <span class="src ${isVeda ? "veda" : isSiftq ? "siftq" : ""}">${isVeda ? "VEDA" : isSiftq ? "SIFTQ" : "PABA"}</span>
+          <span>${acct ? acct.label : (isVeda || isSiftq ? "免账号" : t.accountId)}</span>
           <span>${t.duration || "-"}s</span><span>${t.resolution || t.aspectRatio || "-"}</span>
-          ${t.billing?.free || isVeda ? "<span>免费</span>" : ""}
+          ${t.billing?.free || isVeda || isSiftq ? "<span>免费</span>" : ""}
           <span>${fmtTime(t.upstreamCreatedAt || t.createdAt)}</span>
         </div>
       </div>
@@ -595,12 +683,13 @@ function renderTasks() {
         <button data-op="play">${localUrl ? "打开文件" : "上游查看"}</button>
         ${isVeda
           ? (["done", "failed", "cancelled"].includes(t.status) ? "" : `<button data-op="cancel">取消</button>`)
-          : `<button data-op="del">删除</button>`}
+          : isSiftq ? "" : `<button data-op="del">删除</button>`}
       </div>`;
     el.querySelector('[data-op="copy"]').onclick = () => {
       $("prompt").value = t.prompt || "";
       $("duration").value = t.duration || 5;
       if (isVeda) { setSource("veda"); return window.scrollTo({ top: 0, behavior: "smooth" }); }
+      if (isSiftq) { setSource("siftq"); return window.scrollTo({ top: 0, behavior: "smooth" }); }
       if (acctById(t.accountId) && !acctById(t.accountId).disabled) {
         activeAccount = t.accountId; $("account").value = t.accountId; renderQuota(); renderAccounts();
       }
@@ -609,6 +698,7 @@ function renderTasks() {
     el.querySelector('[data-op="play"]').onclick = () => {
       if (localUrl) window.open(localUrl, "_blank");
       else if (isVeda) window.open("https://veda.hanxiao.run/#/job/" + encodeURIComponent(t.upstreamId), "_blank");
+      else if (isSiftq) window.open("https://siftq.com/minimax-h3/try", "_blank");
       else window.open("https://www.paba.tv/v1/videos/" + t.upstreamId + "/content", "_blank");
     };
     const cancelBtn = el.querySelector('[data-op="cancel"]');
@@ -643,6 +733,9 @@ function renderSyncInfo() {
   if (SOURCE === "veda") {
     $("siteEntry").href = VEDA?.entryPage || "https://veda.hanxiao.run/";
     $("siteEntry").textContent = "打开 Veda ↗";
+  } else if (SOURCE === "siftq") {
+    $("siteEntry").href = SIFTQ?.entryPage || "https://siftq.com/minimax-h3/try";
+    $("siteEntry").textContent = "打开 SiftQ ↗";
   } else if (STATE.siteEntry) {
     $("siteEntry").href = STATE.siteEntry;
     $("siteEntry").textContent = "打开原站 ↗";
@@ -659,9 +752,16 @@ async function refreshVeda() {
   return VEDA;
 }
 
+async function refreshSiftq() {
+  try { SIFTQ = await api("/api/siftq/state"); }
+  catch (e) { SIFTQ = { ok: false, error: e.message }; }
+  return SIFTQ;
+}
+
 async function refresh() {
   STATE = await api("/api/state");
   if (SOURCE === "veda") await refreshVeda();
+  if (SOURCE === "siftq") await refreshSiftq();
   renderAll();
 }
 
@@ -683,6 +783,18 @@ $("btnGen").onclick = async () => {
       });
       const q = out.quota || {};
       toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : `已提交 ${out.upstreamId} · 剩余 ${q.remaining ?? "?"} credit`);
+    } else if (SOURCE === "siftq") {
+      if (!REF.first?.dataUrl) { toast("SiftQ 是图生视频，先上传一张输入图", true); return; }
+      const out = await api("/api/siftq/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          image: REF.first.dataUrl,
+          duration: Number($("duration").value),
+          aspect: "9:16",
+        }),
+      });
+      toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : `已提交 ${out.upstreamId} · 今日剩余 ${out.remaining ?? "?"} 条`);
     } else {
       const out = await api("/api/generate", {
         method: "POST",
@@ -712,6 +824,7 @@ $("btnGen").onclick = async () => {
 $("btnSync").onclick = async () => {
   try {
     if (SOURCE === "veda") { await api("/api/veda/sync", { method: "POST" }); await refresh(); toast("Veda 已对账"); return; }
+    if (SOURCE === "siftq") { await api("/api/siftq/sync", { method: "POST" }); await refresh(); toast("SiftQ 已对账"); return; }
     const id = $("account").value;
     if (id) await api(`/api/accounts/${id}/sync`, { method: "POST" }); else await api("/api/sync", { method: "POST" });
     await refresh();
@@ -723,6 +836,7 @@ $("btnSyncAll").onclick = async () => {
   try {
     await api("/api/sync", { method: "POST" });
     await api("/api/veda/sync", { method: "POST" }).catch(() => {});
+    await api("/api/siftq/sync", { method: "POST" }).catch(() => {});
     await refresh(); toast("同步完成");
   }
   catch (e) { toast(e.message, true); }
@@ -906,6 +1020,7 @@ function addImages(files, target) {
       } catch (e) { toast(e.message, true); }
     }
     renderThumbs();
+    if (SOURCE === "siftq" && target === "first") renderQuota(); // 输入图到位后放开提交按钮
   })();
 }
 
@@ -970,7 +1085,10 @@ function renderThumbs() {
     if (!it) continue;
     const d = document.createElement("div");
     d.innerHTML = thumbCard(it, null, fmtKB(it.dataUrl.length));
-    d.querySelector("[data-x]").onclick = () => { REF[key] = null; renderThumbs(); };
+    d.querySelector("[data-x]").onclick = () => {
+      REF[key] = null; renderThumbs();
+      if (SOURCE === "siftq" && key === "first") renderQuota();
+    };
     box.appendChild(d.firstElementChild);
   }
 }

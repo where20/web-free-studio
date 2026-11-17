@@ -7,6 +7,7 @@ import { listAccounts, upsertAccount, logEvent, load, getUsage } from "./src/sto
 import { loginAccount, syncOne, solveChallengeFor, generate, startServer, seedCookies } from "./src/api.mjs";
 import { startScheduler, syncAll } from "./src/sync.mjs";
 import { startVedaScheduler } from "./src/veda-service.mjs";
+import { startSiftqScheduler } from "./src/siftq-service.mjs";
 import { stopAll } from "./src/chrome.mjs";
 
 const argv = process.argv.slice(2);
@@ -105,12 +106,14 @@ async function main() {
       const server = await startServer();
       const stopScheduler = startScheduler();
       const stopVeda = startVedaScheduler();
+      const stopSiftq = startSiftqScheduler();
       console.log(`▶ 本地工作台  http://localhost:${RUNTIME.port}`);
       console.log(`▶ SSE 事件    http://localhost:${RUNTIME.port}/api/events`);
       const shutdown = async () => {
         console.log("\n… 收尾中");
         stopScheduler();
         stopVeda();
+        stopSiftq();
         server.close();
         await stopAll();
         process.exit(0);

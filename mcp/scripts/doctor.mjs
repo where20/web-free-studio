@@ -130,6 +130,17 @@ async function main() {
     } else {
       warn(`Veda 不可用：${veda.error || "未知原因"}`);
     }
+
+    const siftq = await get("/api/siftq/state").catch((e) => ({ error: e.message }));
+    if (siftq.error) {
+      warn(`SiftQ 状态读取失败：${siftq.error}`);
+    } else if (siftq.ok) {
+      const q = siftq.quota || {};
+      ok(`SiftQ 额度 ${q.used ?? "?"}/${q.limit ?? "?"}，剩余 ${q.remaining ?? "?"} 条（${q.source || "本地账本"}）`);
+      console.log(`      ${C.d}仅 9:16 图生视频，在途 ${siftq.local?.active ?? "?"}/${siftq.local?.maxActive ?? 2}${C.off}`);
+    } else {
+      warn(`SiftQ 不可用：${siftq.error || "未知原因"}`);
+    }
   }
 
   console.log(`\n${C.b}MCP 配置${C.off}`);

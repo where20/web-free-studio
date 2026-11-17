@@ -1,9 +1,9 @@
 # web-free-studio · 本机视频生成工作台
 
-把 **两个免费上游** 的视频生成能力落到本机：`www.paba.tv`（账号池）与 `veda.hanxiao.run`（免账号）。
+把 **三个免费上游** 的视频生成能力落到本机：`www.paba.tv`（账号池）、`veda.hanxiao.run`（免账号）与 `siftq.com`（MiniMax-H3 图生视频）。
 统一任务库、统一资产归档、统一工作台。
 
-> 逆向分析与接口证据见 [`.analysis/REA-REPORT.md`](./.analysis/REA-REPORT.md)（Paba）与 [`.analysis/REA-VEDA.md`](./.analysis/REA-VEDA.md)（Veda）。
+> 逆向分析与接口证据见 [`.analysis/REA-REPORT.md`](./.analysis/REA-REPORT.md)（Paba）与 [`.analysis/REA-VEDA.md`](./.analysis/REA-VEDA.md)（Veda）。SiftQ 只接正向协议，细节见下方章节。
 > 本项目**不复制上游任何代码与界面**，只是「自己账号/设备的本地客户端 + 产物归档器」。
 
 ---
@@ -47,6 +47,39 @@
 
 ---
 
+## 第三个上游 · SiftQ MiniMax-H3（图生视频）
+
+工作台左上「来源」切到 **SiftQ · H3 图生视频** 即可用。它把 `siftq.com/minimax-h3/try` 的匿名试用通道封装进来，
+走 **showcase 通道**（唯一让 prompt 真实生效的通道）。纯 HTTP，不用浏览器。
+
+| 能力 | 说明 |
+|------|------|
+| **图生视频** | 必须给一张输入图（JPEG / PNG / WebP，≤20MB）；文生视频不适用 |
+| **prompt 真生效** | 用英文描述"输入图里要发生的动作"，实测能控制出片内容（不是固定编排） |
+| **额度** | 匿名 2 条/天，**按真实出口 IP 计**；上游无额度查询接口，本地账本 + 提交回执 remaining 校准 |
+| **固定匿名身份** | client id / visitor id 只生成一次落在 `data/siftq.device.json`（0600），等价浏览器 localStorage，不轮换 |
+| **产物回本地** | 上游任务约 1–2 天后回收，出片即镜像到 `data/assets/<日期>/siftq-<taskId>.mp4` |
+
+| 参数 | 值 |
+|------|-----|
+| 画幅 | **仅 9:16**（上游 showcase 通道硬限制，其他画幅 daemon 直接拒） |
+| 时长 | 6s / 10s / 15s（4–7→6，8–12→10，13–20→15） |
+| 在途上限 | 2 条 |
+| 幂等 | 本地 60s 同参数去重 + 提交带 idempotency key |
+
+**接口**：
+```
+GET  /api/siftq/state                 # 额度（本地账本口径）+ 能力 + 在途
+POST /api/siftq/generate              # { prompt, image, duration, aspect:"9:16" }
+POST /api/siftq/sync                  # 对账 + 出片即镜像
+```
+
+> **只接正向协议**：不伪造 XFF、不铸造/轮换匿名身份、429 不换身份重投——这些是规避访问控制，本项目不做。
+> 参考仓库 HaizhuVideo-H3Gateway 的"无限额度"正是靠伪造 XFF + 身份轮换，那部分**没有**融合进来。
+> 额度用完的正路：等次日恢复 / 改用 Veda 或 Paba / 向官方申请提额。
+
+---
+
 ## 为什么 Paba 必须走浏览器通道
 
 实测同一份 Cookie：
@@ -71,6 +104,9 @@ npm start               # 启动本地服务 → http://localhost:8790
 ```
 
 已有登录态迁移（跳过登录）：`npm run cookie -- <accountId> --file cookies.json`
+
+界面右下「生成记录」支持按平台标签过滤：**全部 / PabaTV / Veda Studio / SiftQ**，
+KPI 与卡片列表随选中平台联动，过滤状态记在浏览器 localStorage，刷新后保持。
 
 ---
 
@@ -153,6 +189,26 @@ POST /api/generate
 | `npm run sync -- [id]` | 手动对账 |
 | `npm run gen -- --prompt "..."` | 命令行提交（走同一套队列与额度校验） |
 | `npm run challenge -- <id>` | 触发人机验证（开有头窗口） |
+| `npm test` | 单元测试（node:test，零依赖） |
+| `npm run clean-wm -- <视频...>` | 去除 PabaTV 右下角水印（ffmpeg delogo，见下） |
+
+### 去水印（PabaTV 免费档右下角标识）
+
+PabaTV 免费档成片右下角有静态平台水印。本地工具用 ffmpeg `delogo` 邻域插值覆盖，
+该区域多为云雾/剪影等简单纹理，补后肉眼基本不可辨。**仅用于自己账号生成的内容**。
+
+```bash
+npm run clean-wm -- data/assets/2026-11-16/a.mp4 b.mp4        # 批量，输出 <name>-clean.mp4
+npm run clean-wm -- a.mp4 --box 1148,704,176,40               # 自定义水印框（x,y,w,h）
+npm run clean-wm -- a.mp4 --dry-run                            # 只打印命令不执行
+npm run clean-wm -- a.mp4 --crf 18 --force                     # 画质/覆盖已存在输出
+```
+
+- 默认预设 `paba-tv` 对应 1344×768 画面右下角；输入分辨率不同会**等比换算**水印框。
+- ⚠️ 等比换算不适用于**分屏/拼接片**（水印可能只在一个子画面里）——这类片子传 `--box` 指定实际坐标，
+  或直接用无水印源片重新合成（推荐，避免二次压缩）。
+- 自定义坐标：抽帧 → `ffmpeg -i frame.png -vf "crop=320:120:1024:648,scale=960:360" zoom.png` → 目测边界。
+  坐标取偶数并留边；去水印属规避上游标识，公开商用前先确认平台条款。
 
 ---
 
@@ -184,6 +240,19 @@ curl -s --noproxy '*' -X POST http://localhost:8790/api/veda/sync      # 对账 
 curl -s --noproxy '*' -X POST http://localhost:8790/api/veda/jobs/<jobId>/cancel
 ```
 
+### SiftQ 专用接口
+
+```bash
+curl -s --noproxy '*' http://localhost:8790/api/siftq/state            # 额度 + 能力 + 在途
+
+# 提交（image 必须是输入图：data URL / http(s) 链接 / 本地路径；仅 9:16）
+curl -s --noproxy '*' -X POST http://localhost:8790/api/siftq/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"The player lifts the trophy and turns to the crowd","image":"https://example.com/ref.jpg","duration":6,"aspect":"9:16"}'
+
+curl -s --noproxy '*' -X POST http://localhost:8790/api/siftq/sync     # 对账 + 出片即镜像
+```
+
 > 本机 `http_proxy` 会干扰 `curl 127.0.0.1`，加 `--noproxy '*'` 或用 `localhost`。
 
 ---
@@ -194,7 +263,7 @@ curl -s --noproxy '*' -X POST http://localhost:8790/api/veda/jobs/<jobId>/cancel
 挂上就有工具用。适配层在 [`mcp/`](./mcp/)，独立发布在 `github.com/where20/web-free-studio-mcp`。
 
 ```
-MCP 客户端  →  wfs-mcp (stdio)  →  daemon :8790  →  PabaTV / Veda Studio
+MCP 客户端  →  wfs-mcp (stdio)  →  daemon :8790  →  PabaTV / Veda Studio / SiftQ
 ```
 
 ### 装
@@ -214,7 +283,7 @@ node mcp/scripts/doctor.mjs
 | 工具 | 作用 |
 |---|---|
 | `wfs_status` | 账号池、各账号今日额度、在途任务、Veda 剩余 credit |
-| `wfs_generate` | 提交生成任务（`provider` = veda / paba，支持参考素材本地路径） |
+| `wfs_generate` | 提交生成任务（`provider` = veda / siftq / paba；siftq 需传 `image`；paba 支持参考素材本地路径） |
 | `wfs_tasks` | 列出任务 |
 | `wfs_task` | 查单任务状态与产物路径 |
 | `wfs_accounts` | 账号池管理（列表/同步/停用/验证/授权/导入 cookie/删除） |
@@ -241,6 +310,7 @@ npx -y github:where20/web-free-studio-mcp doctor    # 自检
 | 代码 + MCP 配置 | ✅ | npx 一行搞定 |
 | 任务账本 / 产物 | ✅ | 复制 `data/db.json`、`data/assets/` |
 | Veda 额度 | ⚠️ **不迁移** | 按出口 IP 计，新电脑是新额度 |
+| SiftQ 额度 / 身份 | ⚠️ **不迁移** | 额度按出口 IP 计（新电脑新额度）；`siftq.device.json` 是本地身份，复制与否都不影响额度 |
 | Paba 账号 cookie | ⚠️ 手动 | 复制 `data/accounts/*.cookies.json`，或重新授权 |
 | Chrome profile | ❌ 不建议 | 含机器绑定数据，重新授权更干净 |
 
@@ -254,10 +324,12 @@ npx -y github:where20/web-free-studio-mcp doctor    # 自检
 data/
 ├─ db.json                       # accounts / tasks / usage / log（原子写）
 ├─ veda.device.json              # Veda 设备态（cookie + device id，0600）
+├─ siftq.device.json             # SiftQ 本地匿名会话标识（固定，不轮换，0600）
 ├─ profiles/<accountId>/         # 每账号独立 Chrome profile
 └─ assets/<YYYY-MM-DD>/
    ├─ <taskId>.mp4               # 成片（paba）
    ├─ veda-<jobId>.mp4           # 成片（veda）
+   ├─ siftq-<taskId>.mp4         # 成片（siftq）
    ├─ <taskId>.jpg               # 缩略图
    └─ <taskId>.json              # 上游原始任务 JSON
 ```

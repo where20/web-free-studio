@@ -157,6 +157,7 @@ export function vedaHealth() {
  *   integrated_multimodal_description: [Shot 1] …
  *   overall_soundscape: …
  *   non_diegetic_music: …
+ * 且 description 段内必须带 [Shot N] 标记（否则 500 `no [Shot 1] marker`，不扣额度）。
  * 这里只做「缺什么补什么」的规范化，不替用户改写画面描述。
  */
 const REQUIRED_FIELDS = [
@@ -164,17 +165,32 @@ const REQUIRED_FIELDS = [
   "overall_soundscape:",
   "non_diegetic_music:",
 ];
+const DESC_FIELD = "integrated_multimodal_description:";
+/** 任意 Shot 标记都算数：[Shot 1]、[Shot 2]… 都满足上游的格式要求 */
+const SHOT_MARKER_RE = /\[Shot\s+\d+\]/i;
+
+/**
+ * 保证 description 段内含 [Shot N]，没有就在字段名后补 [Shot 1]。
+ * 幂等：已有任意 [Shot N] 时原样返回，不重复插入。
+ */
+function ensureShotMarker(text) {
+  if (!text.includes(DESC_FIELD)) return text;
+  if (SHOT_MARKER_RE.test(text)) return text;
+  return text.replace(DESC_FIELD, `${DESC_FIELD} [Shot 1]`);
+}
 
 export function normalizePrompt(input, { soundscape = "", music = "" } = {}) {
   const raw = String(input || "").trim();
   if (!raw) return raw;
   const missing = REQUIRED_FIELDS.filter((f) => !raw.includes(f));
-  if (!missing.length) return raw;
+  // 三段式齐全也要过 ensureShotMarker：这是踩过的坑——用户自己写全三段式，
+  // 但 description 里没写 [Shot 1]，daemon 旧逻辑直接 return raw，上游 500。
+  if (!missing.length) return ensureShotMarker(raw);
 
-  const desc = raw.includes("integrated_multimodal_description:")
+  const desc = raw.includes(DESC_FIELD)
     ? raw
-    : `integrated_multimodal_description: [Shot 1] ${raw}`;
-  const lines = [desc];
+    : `${DESC_FIELD} [Shot 1] ${raw}`;
+  const lines = [ensureShotMarker(desc)];
   if (!raw.includes("overall_soundscape:")) {
     lines.push(`overall_soundscape: ${soundscape || "Natural ambience that matches the scene, close to the subject."}`);
   }

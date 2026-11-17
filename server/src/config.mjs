@@ -37,6 +37,32 @@ export const VEDA = {
   pollIdleMs: Number(process.env.VEDA_POLL_IDLE_MS || 60_000),
 };
 
+/**
+ * 第三个上游：SiftQ MiniMax-H3（匿名试用，纯 HTTP 通道）。
+ * 硬限制：图生视频、仅 9:16、6/10/15s、匿名每日 2 条（按真实出口 IP）。
+ * 只用上游给的额度：本地账本记 2 条/天，429 如实上报，不伪造 XFF / 不轮换身份。
+ */
+export const SIFTQ = {
+  origin: "https://siftq.com",
+  entryPage: "https://siftq.com/minimax-h3/try",
+  referer: "https://siftq.com/minimax-h3/try/zh",
+  accountId: "siftq",
+  dailyLimit: Number(process.env.SIFTQ_DAILY_LIMIT || 2),
+  showcaseId: process.env.SIFTQ_SHOWCASE_ID || "case-mtqzygu8",
+  defaultPrompt:
+    "Animate the scene in the image with natural, faithful motion. " +
+    "Keep the subject and setting consistent with the input image.",
+  imageMaxBytes: Number(process.env.SIFTQ_IMAGE_MAX_BYTES || 20 * 1024 * 1024),
+  maxActive: Number(process.env.SIFTQ_MAX_ACTIVE || 2),
+  pollActiveMs: Number(process.env.SIFTQ_POLL_MS || 8_000),
+  pollIdleMs: Number(process.env.SIFTQ_POLL_IDLE_MS || 60_000),
+  paths: {
+    submit: "/api/minimax-trial/showcase/video-generation",
+    job: (id) => `/api/minimax-trial/video-generation/${encodeURIComponent(id)}`,
+    content: (id) => `/api/minimax-trial/video-generation/${encodeURIComponent(id)}/content`,
+  },
+};
+
 export const RUNTIME = {
   port: Number(process.env.PORT || 8790),
   headless: process.env.HEADED === "1" ? false : true,
