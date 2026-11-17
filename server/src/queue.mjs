@@ -12,6 +12,7 @@
 import { RUNTIME, isFreeModel, FREE_MODELS } from "./config.mjs";
 import {
   getAccount,
+  upsertAccount,
   upsertTask,
   bumpUsage,
   getUsage,
@@ -212,7 +213,11 @@ async function run(job) {
     job.upstreamId = upstreamId;
     job.status = "submitted";
     job.finishedAt = Date.now();
-    lastSubmitAt.set(accountId, Date.now());
+    const submittedAt = Date.now();
+    lastSubmitAt.set(accountId, submittedAt);
+    // 持久化「最近提交时间」：pickAccountId 的「最久未用」轮询维度靠它生效
+    // （内存 Map 只在本进程有效，重启后丢失；账号字段才是跨重启的真值）
+    await upsertAccount({ id: accountId, lastSubmitAt: submittedAt }).catch(() => {});
 
     await upsertTask({
       accountId,
@@ -262,7 +267,19 @@ async function run(job) {
   }
 }
 
-/** 未指定账号时：优先在线、未停用、今日消耗最少、在途最少的账号 */
+/**
+ * 轮询排序（纯函数，便于单测）：
+ *   在途少 → 今日消耗少 → 最久未提交（last）
+ * 消耗维度天然拉平各账号用量；消耗/在途相同时用 last 打破平局，
+ * 保证每次提交都轮到下一个账号，而不是总挑同一个。
+ */
+export function rankAccounts(scored) {
+  return scored
+    .slice()
+    .sort((a, b) => a.active - b.active || a.consumed - b.consumed || a.last - b.last);
+}
+
+/** 未指定账号时的自适应轮询选择：在线可用账号里按 rankAccounts 挑第一个 */
 export async function pickAccountId() {
   const { listAccounts } = await import("./store.mjs");
   const accounts = (await listAccounts()).filter((a) => a.status === "online" && !a.disabled);
@@ -277,8 +294,7 @@ export async function pickAccountId() {
     scored.push({ id: a.id, active, consumed: consumedOf(usage), last: a.lastSubmitAt || 0 });
   }
   if (!scored.length) throw new Error("所有账号都已到额度/在途上限，等出片后再提交");
-  scored.sort((a, b) => a.active - b.active || a.consumed - b.consumed || a.last - b.last);
-  return scored[0].id;
+  return rankAccounts(scored)[0].id;
 }
 
 export async function waitJob(id, timeoutMs = RUNTIME.jobTimeoutMs) {

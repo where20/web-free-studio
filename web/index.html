@@ -119,6 +119,17 @@
   .src.siftq{background:#fff1e8!important;color:#c05621!important}
   .filterseg{margin:0 0 0 auto;width:auto;flex:0 0 auto}
   .filterseg button{padding:4px 12px}
+  /* 设置中心：账号池 + 运行日志默认收纳，展开后两栏 */
+  .settings-center{max-width:1320px;margin:0 auto 28px;width:calc(100% - 40px);background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+  .settings-center>summary{list-style:none;cursor:pointer;padding:13px 16px;display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;color:var(--ink)}
+  .settings-center>summary::-webkit-details-marker{display:none}
+  .settings-center>summary .caret{display:inline-block;color:var(--sub);transition:transform .15s}
+  .settings-center[open]>summary .caret{transform:rotate(90deg)}
+  .settings-center>summary .sub{font-weight:400;color:var(--sub);font-size:12px}
+  .settings-center>summary .pill{margin-left:auto}
+  .settings-body{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:0 16px 16px}
+  @media(max-width:960px){.settings-body{grid-template-columns:1fr}}
+  .settings-body .log{max-height:320px}
 </style>
 </head>
 <body>
@@ -210,15 +221,7 @@
   </section>
 
   <section class="card">
-    <h3>账号池 <span class="pill" id="acctCount">0</span><span class="pill" id="poolSum"></span></h3>
-    <div class="queuebar" id="queuebar"></div>
-    <div class="body acct" id="accounts"></div>
-    <div class="body" style="border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <button id="btnAddAcct" class="primary">＋ 新增账号</button>
-      <span class="hint" style="margin:0">每个账号独立浏览器 profile（登录态/设备态互不串号）；单账号每天 15 次、最多 2 条在途，加账号才能扩总额度与并发。</span>
-    </div>
-
-    <h3 style="border-top:1px solid var(--line);flex-wrap:wrap">
+    <h3 style="flex-wrap:wrap">
       生成记录 <span class="pill" id="taskCount">0</span>
       <div class="seg filterseg" id="taskFilter">
         <button data-filter="all" class="on">全部</button>
@@ -235,10 +238,24 @@
   </section>
 </main>
 
-<section class="card" style="max-width:1320px;margin:0 auto 28px;width:calc(100% - 40px)">
-  <h3>运行日志</h3>
-  <div class="log" id="log"></div>
-</section>
+<details class="settings-center" id="settingsCenter">
+  <summary><span class="caret">▸</span> 设置中心 <span class="sub">账号池 · 运行日志</span><span class="pill" id="acctCount">0</span></summary>
+  <div class="settings-body">
+    <section class="card">
+      <h3>账号池 <span class="pill" id="poolSum"></span></h3>
+      <div class="queuebar" id="queuebar"></div>
+      <div class="body acct" id="accounts"></div>
+      <div class="body" style="border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button id="btnAddAcct" class="primary">＋ 新增账号</button>
+        <span class="hint" style="margin:0">每个账号独立浏览器 profile（登录态/设备态互不串号）；单账号每天 15 次、最多 2 条在途。提交时选「自动轮询」会在可用账号间均衡切换。</span>
+      </div>
+    </section>
+    <section class="card">
+      <h3>运行日志</h3>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+</details>
 
 <div class="modal" id="addModal" hidden>
   <div class="sheet">
@@ -476,15 +493,22 @@ document.querySelectorAll("#taskFilter button").forEach((b) => { b.onclick = () 
 function renderForm() {
   const sel = $("account");
   const list = STATE.accounts.filter((a) => a.status !== "removed" && !a.disabled);
-  sel.innerHTML = list.length
+  const autoOpt = `<option value="">⚡ 自动轮询（按额度/在途切换，推荐）</option>`;
+  sel.innerHTML = autoOpt + (list.length
     ? list.map((a) => {
         const left = a.usage?.left ?? STATE.limits.freeDailyLimit;
         return `<option value="${a.id}">${a.label}（剩余 ${left} 次）</option>`;
       }).join("")
-    : `<option value="">（无可用账号）</option>`;
+    : ``);
+  // 默认自动轮询：只有用户上次显式选过账号（fs.account 有值且仍可用）才锁死
   if (activeAccount && list.some((a) => a.id === activeAccount)) sel.value = activeAccount;
-  else if (list[0]) { activeAccount = list[0].id; sel.value = activeAccount; }
-  sel.onchange = () => { activeAccount = sel.value; localStorage.setItem("fs.account", activeAccount); renderAccounts(); renderQuota(); };
+  else sel.value = "";
+  sel.onchange = () => {
+    activeAccount = sel.value;
+    if (activeAccount) localStorage.setItem("fs.account", activeAccount);
+    else localStorage.removeItem("fs.account");
+    renderAccounts(); renderQuota();
+  };
 
   const m = $("model"), r = $("ratio"), d = $("duration");
   $("resField").hidden = SOURCE !== "paba"; // Veda / SiftQ 都没有清晰度档，画幅/上游写死
@@ -585,7 +609,28 @@ function renderQuota() {
     return;
   }
 
-  const a = acctById($("account").value);
+  const picked = $("account").value;
+  const usable = STATE.accounts.filter((a) => a.status !== "removed" && !a.disabled && a.status === "online");
+  const a = picked ? acctById(picked) : null;
+
+  if (!picked) {
+    // 自动轮询：显示账号池总览，额度/在途都汇总；后端按「在途少→消耗少→最久未用」挑账号
+    const totalLeft = usable.reduce((s, x) => s + (x.usage?.left ?? Math.max(0, (STATE.limits.freeDailyLimit ?? 15) - (x.usage?.consumed ?? 0))), 0);
+    const totalActive = usable.reduce((s, x) => s + (x.active ?? 0), 0);
+    const cap = usable.length * (STATE.limits.freeDailyLimit ?? 15);
+    const pct = Math.min(100, Math.round(((cap - totalLeft) / Math.max(1, cap)) * 100));
+    line.innerHTML = `<span>⚡ 自动轮询 · 账号池 <b>${usable.length}</b> 个 · 今日剩余 <b>${totalLeft}</b> 次 · 在途 ${totalActive}</span>
+      <span class="track"><i class="${totalLeft === 0 ? "full" : ""}" style="width:${pct}%"></i></span>`;
+    const blocked = !usable.length || totalLeft <= 0;
+    $("btnGen").disabled = blocked;
+    $("genHint").textContent = !usable.length
+      ? "没有在线账号，先到「设置中心 → 账号池」授权。"
+      : totalLeft <= 0
+        ? "账号池今日免费额度已全部用完，等明天重置。"
+        : "提交时不锁死账号，后端按「在途少 → 剩余多 → 最久未用」自动轮询切换；想固定账号可在上方选具体账号。";
+    return;
+  }
+
   if (!a) { line.innerHTML = "<span>无可用账号，先在账号池授权</span>"; $("btnGen").disabled = true; return; }
   const used = a.usage?.consumed ?? 0;
   const limit = a.usage?.limit ?? STATE.limits.freeDailyLimit ?? 15;
@@ -596,10 +641,10 @@ function renderQuota() {
   const blocked = left <= 0 || (a.active ?? 0) >= (STATE.limits.maxActivePerAccount ?? 3);
   $("btnGen").disabled = blocked;
   $("genHint").textContent = left <= 0
-    ? "该账号今日免费次数已用完，换账号或等明天重置。"
+    ? "该账号今日免费次数已用完，换账号或选「自动轮询」。"
     : (a.active ?? 0) >= (STATE.limits.maxActivePerAccount ?? 3)
-      ? "该账号在途任务已满，等出片后再提交（免费队列较慢）。"
-      : "只开放免费模型；每次提交按「消耗 1 次」计账，提交失败自动退还。";
+      ? "该账号在途任务已满，等出片后再提交，或选「自动轮询」。"
+      : "已锁定该账号；改选「自动轮询」可让后端均衡切换账号。";
 }
 
 function renderQueue() {
@@ -814,7 +859,10 @@ $("btnGen").onclick = async () => {
           lastFrame: REF.last?.dataUrl,
         }),
       });
-      toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : "已提交 " + out.upstreamId);
+      const chosen = out.accountId ? (acctById(out.accountId)?.label || out.accountId) : "自动";
+      toast(out.deduped
+        ? "同参数刚提交过，已复用 " + out.upstreamId
+        : `已提交 ${out.upstreamId} · ${$("account").value ? "账号 " + chosen : "⚡ 自动轮询 → " + chosen}`);
     }
     await refresh();
   } catch (e) { toast(e.message, true); }
@@ -1229,6 +1277,14 @@ document.querySelectorAll("#sourceSeg button").forEach((b) => {
   b.classList.toggle("on", b.dataset.src === SOURCE);
 });
 $("pabaFields").hidden = SOURCE !== "paba";
+
+// 设置中心：默认收纳，展开状态持久化（避免每次刷新都要重新展开）
+(function initSettingsCenter() {
+  const box = $("settingsCenter");
+  if (!box) return;
+  box.open = localStorage.getItem("fs.settingsOpen") === "1";
+  box.addEventListener("toggle", () => localStorage.setItem("fs.settingsOpen", box.open ? "1" : "0"));
+})();
 
 refresh().then(connect).catch((e) => toast("加载失败：" + e.message, true));
 setInterval(refresh, 15000);
