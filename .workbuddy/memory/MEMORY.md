@@ -36,6 +36,8 @@
 - `api.mjs`：`/api/siftq/state|generate|sync`；`cli.mjs`：`startSiftqScheduler()`
 - `web/index.html`：SOURCE 三选（paba/veda/siftq 表单独立渲染；**siftq 用「首帧」槽位当输入图**，resField 仅 paba 显示）
 - MCP `wfs_*` 全支持 siftq（`image` 参数：本地路径→dataURL / http 链接透传）
+- **PabaTV 账号自适应轮询**（2026-11-17）：账号下拉默认「⚡ 自动轮询」(value="")，提交不传 accountId 让后端挑；纯函数 `rankAccounts`（queue.mjs 导出）= 在途少→消耗少→最久未用(lastSubmitAt)。**坑**：提交成功必须 `upsertAccount({id,lastSubmitAt})` 持久化，否则「最久未用」恒 0 总挑同一账号（内存 Map 只做最小间隔）。单测 `test/account-rotation.test.mjs`
+- **设置中心**：账号池 + 运行日志收进 `<details id="settingsCenter">` 默认收起，`fs.settingsOpen` 持久化；生成记录留 main 主区
 - store.mjs 的 `listTasks` 支持 `provider` 过滤；`countActive` 只认 pending/queued/running，**veda/siftq 在途各自算**（`activeVeda()`/`activeSiftq()`）；`isTerminal` 要同时认本地映射态 done/cancelled 和上游态 succeeded/canceled（踩过：只认上游态导致 done 任务被算在途）
 - **upsertTask 主键 = String(upstreamId)**：toTaskRow / 同步合并时**必须透传 upstreamId**，丢了会建「无 id 僵尸行」（踩过：轮询查 undefined 报 `invalid trial task id`）
 
@@ -99,7 +101,7 @@
 ## 当前状态（2026-11-17 11:55）
 
 - SiftQ 已融合并实测出片：`data/assets/2026-11-17/siftq-2122537073886478336.mp4`（h264/768×1344/aac/6.58s/1.1MB）。今日额度 used 1/2，剩 1 条，次日按出口 IP 恢复。
-- git 最新 `c0cbbfd`（feat: 融合 SiftQ 合规版，含上一会话 Veda Shot 修复+test+去水印脚本）；**未 push**。
+- git 最新 `b9398cc`（设置中心收纳 + PabaTV 账号自适应轮询）；之前 `c0cbbfd`（SiftQ 融合）/`1b152eb`（记忆）；**均未 push**。
 - daemon 在 `:8790` 运行（由适配层按需拉起）；Veda **剩 8/20 credit**（used 12），今日 15:17Z 恢复（+24h 滚动窗口）。
 - 任务库 13 条；paba 账号 7 个（main 与 --7 在线可用，其余 removed）。本次出片的 6 段源片均 daemon 自动镜像成功落盘。
 - 本次成片交付：`qitian-35s-{character,background,split}.mp4` + `-clean` 无水印版，均在 `data/assets/2026-11-16/`，已 present 给用户。
