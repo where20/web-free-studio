@@ -1,41 +1,49 @@
 # web-free-studio · 项目长期记忆
 
-> 详细过程看 `2026-11-16.md` 日志；本文件只留跨会话必须知道的事实与约定。
-> 更新于 2026-11-17 早（齐天大圣 35s 出片后）。
+> 详细过程看 `2026-11-16.md`（Paba/Veda/MCP）与 `2026-11-17.md`（SiftQ）日志；本文件只留跨会话必须知道的事实与约定。
+> 更新于 2026-11-17（SiftQ 融合后）。
 
 ## 项目定位
 
-两个免费上游的本地视频工作台（`:8790`）：**PabaTV**（账号池）+ **Veda Studio**（免账号）。
+三个免费上游的本地视频工作台（`:8790`）：**PabaTV**（账号池）+ **Veda Studio**（免账号）+ **SiftQ MiniMax-H3**（图生视频）。
 统一任务库 `data/db.json`（原子写，**单实例锁 `data/.server.lock`，多进程会互相覆盖**）、
 统一资产 `data/assets/<日期>/`、SSE `/api/events`。
 报告：`.analysis/REA-REPORT.md`（Paba）、`.analysis/REA-VEDA.md`（Veda）。
 
 ## 上游硬事实（别再踩）
 
-| | PabaTV | Veda Studio |
-|---|---|---|
-| 写通道 | 必须真实浏览器（TLS 指纹 + Turnstile） | **纯 Node fetch 即可**（实测 201，不需要 X-Fp） |
-| 身份 | `h3v/h3s/__Host-h3d` cookie 罐 | 服务端下发 `veda_did`（UUID.签名，**别自造**）→ `data/veda.device.json`（0600，不入 git） |
-| 额度 | 15 条/账号/天（无上游查询接口，本地账本） | 20 credits/天（5s=1/10s=2/15s=3）**按出口 IP 计**，换设备/清 cookie 无效；另有同网络 30 条/天 |
-| prompt | 自由文本 | **强制三段式** `integrated_multimodal_description:` / `overall_soundscape:` / `non_diegetic_music:`，缺→400 不扣额度；适配器自动补全，**长度校验必须打在用户原文上**（踩过：先补后查导致 "hi" 白扣 1 credit）。**额外坑**：自己写全三段式时 description 内必须手动带 `[Shot 1]` 标记（daemon 只在字段缺失时才补）→ 否则 500 `no [Shot 1] marker`；正文禁止出现画幅字样（如 `16:9`）→ 报 `the prompt states the aspect ratio`，aspect 只能走参数，改用 `cinematic widescreen framing`。这两类 500 都**不扣额度** |
-| 列表/回溯 | `/v1/videos` 可回溯 | ❌ 无列表接口，只能前进式，job_id 必须本地落库 |
-| 产物 | media.paba.tv 公开 CDN | `/api/jobs/{id}/video` 公开（206 Range） |
-| 字段坑 | epoch 秒 | `created_at` 是 ISO 字符串；进度嵌在 `progress` 里；`timings.queue` 是排队秒数 |
-| 耗时 | 免费档 10–40 分钟 | 5s/9:16 ≈ 5 分 44 秒（排队 181s + 生成 162s）；1:1 最快 |
-| 网络 | — | 偶发 `UND_ERR_CONNECT_TIMEOUT`（CF 节点质量不均）→ GET 退避重试 3 次，**POST 不重试**（防重复扣） |
+| | PabaTV | Veda Studio | SiftQ MiniMax-H3 |
+|---|---|---|---|
+| 写通道 | 必须真实浏览器（TLS 指纹 + Turnstile） | 纯 Node fetch（无需浏览器，不需要 X-Fp） | 纯 Node fetch + 浏览器 UA（CLI curl 直连 403，node fetch 可过） |
+| 身份 | `h3v/h3s/__Host-h3d` cookie 罐 | 服务端下发 `veda_did`（UUID.签名，**别自造**）→ `data/veda.device.json`（0600，不入 git） | 本地固定 `client_id=mmtrial_`/`visitor_id=mmguest_` → `data/siftq.device.json`（0600，只生成一次，**不轮换**） |
+| 额度 | 15 条/账号/天（无上游查询接口，本地账本） | 20 credits/天（5s=1/10s=2/15s=3）**按出口 IP 计**，换设备/清 cookie 无效；另有同网络 30 条/天 | 匿名 2 条/天，按**真实出口 IP**；无查询接口，本地账本 + 提交回执 `remaining` 校准 |
+| prompt | 自由文本 | **强制三段式** `integrated_multimodal_description:` / `overall_soundscape:` / `non_diegetic_music:`，缺→400 不扣额度；适配器自动补全，**长度校验打在用户原文上**（踩过：先补后查 "hi" 白扣 1 credit）。**额外坑**：写全三段式时 description 内必须手动带 `[Shot N]` 标记→否则 500 `no [Shot 1] marker`；正文禁写画幅字样（如 `16:9`）→报 `the prompt states the aspect ratio`，改用 `cinematic widescreen framing`。这两类 500 都**不扣额度** | 英文描述动作，**showcase 通道才生效**（普通口忽略 prompt 固定产跳舞片）；正文禁写画幅/时长 |
+| 形态 | 文生/参考/首尾帧，多画幅 | 文生视频，多画幅 | **图生视频，仅 9:16，6/10/15s**（4-7→6,8-12→10,13-20→15） |
+| 列表/回溯 | `/v1/videos` 可回溯 | ❌ 无列表接口，只能前进式，job_id 必须本地落库 | 无列表，前进式；查 `.../video-generation/{id}?access_token=` |
+| 端点 | `/v1/videos` 提交/查询 | `/api/jobs` 系列 | 提交 `/api/minimax-trial/showcase/video-generation`（multipart）；下载 `.../{id}/content?client_id=&access_token=` |
+| 字段坑 | epoch 秒 | `created_at` 是 ISO 字符串；进度嵌在 `progress` 里；`timings.queue` 是排队秒数 | `task_id`/`access_token` 在提交响应顶层；poll 状态 `succeeded/failed/canceled` |
+| 产物 | media.paba.tv 公开 CDN（206） | `/api/jobs/{id}/video` 公开（206） | `.../content` 直出 mp4；上游约 1–2 天回收任务 → **出片即镜像落盘**（下载 GET 退避重试 3 次） |
+| 耗时 | 免费档 10–40 分钟 | 5s/9:16 ≈ 5 分 44 秒（排队 181s + 生成 162s）；1:1 最快 | 实测约 1–2 分钟出片 |
+| 网络 | — | 偶发 `UND_ERR_CONNECT_TIMEOUT` → GET 退避重试 3 次，**POST 不重试**（防重复扣） | 偶发下载卡住 → content GET 退避重试 3 次；POST 不重试 |
 
 ## 代码结构（新增部分）
 
 - `server/src/providers/veda.mjs`：纯 Node 适配器（设备态/6 端点/prompt 规范化/镜像/重试）
 - `server/src/veda-service.mjs`：编排（双闸→提交→落库→自适应轮询 8s/60s→镜像；上游三件套 15s 缓存）
 - `server/src/api.mjs`：`/api/veda/state|generate|sync|jobs/:id/cancel`，错误映射 428/429
-- `web/index.html`：SOURCE 切换（paba/veda 表单独立渲染；resField 仅 paba 显示）
-- store.mjs 的 `listTasks` 支持 `provider` 过滤；`countActive` 只认 pending/queued/running，**veda 在途要自己算**（`activeVeda()`，含 denoising 等细分阶段）
+- `server/src/providers/siftq.mjs`：适配器（固定设备态/3 端点/prompt+时长规范化/mime sniff/镜像/下载重试）
+- `server/src/siftq-service.mjs`：编排（双闸/60s 幂等/自适应轮询 8s-60s/SSE），accountId=provider="siftq"
+- `api.mjs`：`/api/siftq/state|generate|sync`；`cli.mjs`：`startSiftqScheduler()`
+- `web/index.html`：SOURCE 三选（paba/veda/siftq 表单独立渲染；**siftq 用「首帧」槽位当输入图**，resField 仅 paba 显示）
+- MCP `wfs_*` 全支持 siftq（`image` 参数：本地路径→dataURL / http 链接透传）
+- store.mjs 的 `listTasks` 支持 `provider` 过滤；`countActive` 只认 pending/queued/running，**veda/siftq 在途各自算**（`activeVeda()`/`activeSiftq()`）；`isTerminal` 要同时认本地映射态 done/cancelled 和上游态 succeeded/canceled（踩过：只认上游态导致 done 任务被算在途）
+- **upsertTask 主键 = String(upstreamId)**：toTaskRow / 同步合并时**必须透传 upstreamId**，丢了会建「无 id 僵尸行」（踩过：轮询查 undefined 报 `invalid trial task id`）
 
 ## 边界（多次确认过，别再提）
 
-- **不做**代理池/换出口 IP 刷 Veda 额度、不做设备指纹伪造——技术上可行但属规避访问控制。用户问过三次，已拒绝并给正路。
-- 正路：① 邮件向作者要 **unlock key**（站点自带 `/api/unlock {key}`，是官方机制）→ xinting@ustc.edu.cn / xjqi@hku.hk；② 项目开源可自部署（`github.com/veda-sparse/Veda-on-ComfyUI` + HF `Veda-Sparse`）；③ 排产自动化。
+- **不做**代理池/换出口 IP 刷 Veda 额度、不做设备指纹伪造、不伪造 XFF、不铸造/轮换匿名身份刷 SiftQ 额度——技术上可行但属规避访问控制。用户问过三次 Veda + 一次 SiftQ（给仓库链接要"照搬绕限额"），都已拒绝并给正路。
+- SiftQ 只接正向协议：固定单一本地身份、真实出口 IP、429 如实上报。参考仓库 HaizhuAI/HaizhuVideo-H3Gateway 的核心是伪造 XFF + 身份轮换，**那部分没融合**。
+- 正路：① 邮件向作者要 **unlock key**（Veda 站点自带 `/api/unlock {key}`，官方机制）→ xinting@ustc.edu.cn / xjqi@hku.hk；② 项目开源可自部署（`github.com/veda-sparse/Veda-on-ComfyUI` + HF `Veda-Sparse`）；③ 向 SiftQ/MiniMax 官方申请提额；④ 排产自动化。
 
 ## 本机环境坑
 
@@ -88,8 +96,10 @@
 - **PabaTV 右下角水印去除**：ffmpeg `delogo=x=1148:y=704:w=176:h=40`（1344×768 画面，偶数对齐+留边）；定位法=抽帧→`crop=320:120:1024:648,scale=×3`→ViewImage 目测。云雾/剪影类简单纹理插值后肉眼不可辨。仅用于自有内容（去水印或违反上游条款）。
 - 产物在 `data/assets/2026-11-16/`：`qitian-35s-{character,background,split}.mp4` 及对应 `-clean.mp4` 无水印版；六段源片同目录。
 
-## 当前状态（2026-11-17 09:36）
+## 当前状态（2026-11-17 11:55）
 
+- SiftQ 已融合并实测出片：`data/assets/2026-11-17/siftq-2122537073886478336.mp4`（h264/768×1344/aac/6.58s/1.1MB）。今日额度 used 1/2，剩 1 条，次日按出口 IP 恢复。
+- git 最新 `c0cbbfd`（feat: 融合 SiftQ 合规版，含上一会话 Veda Shot 修复+test+去水印脚本）；**未 push**。
 - daemon 在 `:8790` 运行（由适配层按需拉起）；Veda **剩 8/20 credit**（used 12），今日 15:17Z 恢复（+24h 滚动窗口）。
 - 任务库 13 条；paba 账号 7 个（main 与 --7 在线可用，其余 removed）。本次出片的 6 段源片均 daemon 自动镜像成功落盘。
 - 本次成片交付：`qitian-35s-{character,background,split}.mp4` + `-clean` 无水印版，均在 `data/assets/2026-11-16/`，已 present 给用户。
