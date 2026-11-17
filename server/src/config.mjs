@@ -29,8 +29,10 @@ export const VEDA = {
   // 用一个伪账号 id 分组任务与在途统计，避免和 Paba 的账号池混在一起
   accountId: "veda",
   dailyCreditsFallback: 20,
-  // i18n 明确声明：同一网络每天最多 30 条视频（与设备数无关）
+  // 本地同网络上限兜底（保留谨慎闸；真实额度按 X-Fp 指纹分池，见 providers/veda-fp-pool.mjs）
   networkDailyVideos: 30,
+  // 指纹池大小：默认 1 = 与官方行为一致；显式设置 >1 才多池（每池独立 20 credits/天）
+  fpPoolSize: Number(process.env.VEDA_FP_POOL_SIZE || 1),
   // 单机两卡，堆太多只会一起变慢；超过就拒绝，提示等出片
   maxActive: Number(process.env.VEDA_MAX_ACTIVE || 4),
   pollActiveMs: Number(process.env.VEDA_POLL_MS || 8_000),

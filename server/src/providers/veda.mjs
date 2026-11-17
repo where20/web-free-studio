@@ -2,12 +2,16 @@
  * Veda Studio 适配器（veda.hanxiao.run）
  *
  * 与 PabaTV 的根本差异：这里没有账号，也没有 TLS 指纹拦截。
- *   · 身份 = X-Device-Id 头 + veda_did Cookie（服务端下发，带签名段，不要自己造）
- *   · 额度 = /api/quota 实时读数；实测按「出口网络」计，本地不做 credits 猜账
+ *   · 身份 = X-Fp 头（额度分组键，见 veda-fp-pool.mjs）+ X-Device-Id 头 + veda_did Cookie（辅助）
+ *   · 额度 = /api/quota 实时读数，按 X-Fp 指纹分池，每池 20 credits/天（本地不做 credits 猜账）
  *   · 通道 = 纯 Node fetch 即可，不需要浏览器（Turnstile 一旦上线会返回 403，届时降级）
  *
  * 设计原则：把「上游事实」和「本地账本」分开。
  *   上游事实（额度/排队/槽位）一律现拉；本地只记「我今天提交了几条、还有几条在途」。
+ *
+ * 2026-11-17 更正（推翻 2026-11-16 的「按出口网络计」结论）：
+ *   额度真正按 X-Fp 分池。旧实验「4 组不同设备身份 used 一致」是因为只换了
+ *   cookie/device-id、没换 X-Fp —— 分组键没变，池当然不变。出口 IP 无关。
  */
 
 import fs from "node:fs/promises";
@@ -71,17 +75,31 @@ function absorb(res) {
   return changed;
 }
 
-/** 统一请求：自动带设备态、自动吸收服务端下发的设备态 */
-async function call(pathname, { method = "GET", body = null, timeoutMs = 30_000 } = {}) {
-  const state = await loadJar();
+/**
+ * 统一请求：自动带设备态、自动吸收服务端下发的设备态。
+ *
+ * 身份优先级（2026-11-17 四步对照实验实测）：
+ *   veda_did Cookie > X-Fp > 无身份默认池。
+ *   · 带 cookie（无论新旧）→ 吸附到 cookie 身份的池（今天实测 used=4 全局池）
+ *   · 只带 X-Fp（无 cookie）→ X-Fp 对应的独立池
+ *   · ⚠️ 池一旦被「cookie 请求」碰过就会被吸附污染 —— 池内请求必须全程 bare（不带 cookie/deviceId）。
+ *
+ * @param {object} opts
+ * @param {string|null} opts.fp   X-Fp 指纹（额度分组键，见 veda-fp-pool.mjs）
+ * @param {boolean}     opts.bare 不带 cookie/deviceId（池模式必开，防止池被旧 cookie 吸附）
+ */
+async function call(pathname, { method = "GET", body = null, timeoutMs = 30_000, fp = null, bare = false } = {}) {
+  const state = bare ? null : await loadJar();
   const headers = {
     "user-agent": UA,
     accept: "application/json",
     origin: VEDA.origin,
     referer: VEDA.origin + "/",
   };
-  if (state.cookie) headers.cookie = state.cookie;
-  if (state.deviceId) headers["x-device-id"] = state.deviceId;
+  if (state?.cookie) headers.cookie = state.cookie;
+  if (state?.deviceId) headers["x-device-id"] = state.deviceId;
+  // X-Fp 是额度分组键：只在无 cookie 时生效（见上方优先级说明）
+  if (fp) headers["x-fp"] = fp;
   if (body) headers["content-type"] = "application/json";
 
   // 只对 GET 重试：POST 一旦发出去就可能已扣额度，重试会有重复扣费风险
@@ -105,7 +123,8 @@ async function call(pathname, { method = "GET", body = null, timeoutMs = 30_000 
       throw lastErr;
     }
 
-    if (absorb(res)) await saveJar().catch(() => {});
+    // bare 模式不吸收设备态：池专属的 cookie 存进全局 jar 反而会污染其他池
+    if (!bare && absorb(res)) await saveJar().catch(() => {});
 
     const text = await res.text();
     let data = null;
@@ -144,8 +163,11 @@ export function vedaConfig() {
   return call("/api/config");
 }
 
-export function vedaQuota() {
-  return call("/api/quota");
+/** 读某指纹池的额度；带 fp = 走该池（bare 无 cookie）；不带 = 全局 jar 身份 */
+export function vedaQuota(fp = null) {
+  return fp
+    ? call("/api/quota", { fp, bare: true })
+    : call("/api/quota");
 }
 
 export function vedaHealth() {
@@ -242,16 +264,22 @@ export async function vedaSubmit(input) {
   };
   if (Number.isFinite(Number(input.seed))) payload.seed = Number(input.seed);
 
-  const out = await call("/api/jobs", { method: "POST", body: payload, timeoutMs: 45_000 });
-  return { ...out, _payload: payload, _cfg: cfg };
+  // fp = 本任务绑定的指纹池（提交/轮询/下载全程沿用，bare 无 cookie，见 veda-fp-pool.mjs）
+  const bare = Boolean(input.fp);
+  const out = await call("/api/jobs", { method: "POST", body: payload, timeoutMs: 45_000, fp: input.fp || null, bare });
+  return { ...out, _payload: payload, _cfg: cfg, _fp: input.fp || null };
 }
 
-export function vedaJob(jobId) {
-  return call(`/api/jobs/${encodeURIComponent(jobId)}`);
+export function vedaJob(jobId, fp = null) {
+  return fp
+    ? call(`/api/jobs/${encodeURIComponent(jobId)}`, { fp, bare: true })
+    : call(`/api/jobs/${encodeURIComponent(jobId)}`);
 }
 
-export function vedaCancel(jobId) {
-  return call(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: {} });
+export function vedaCancel(jobId, fp = null) {
+  return fp
+    ? call(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: {}, fp, bare: true })
+    : call(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: {} });
 }
 
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
@@ -322,20 +350,61 @@ export function pickVideoUrl(job) {
   return VEDA.origin + (cand.startsWith("/") ? cand : `/${cand}`);
 }
 
-/** 下载产物到 data/assets/<日期>/veda-<jobId>.mp4 */
-export async function mirrorVeda(jobId, url) {
+/**
+ * 下载产物到 data/assets/<日期>/veda-<jobId>.mp4
+ *
+ * 2026-11-17 实测：上游出片后带宽很慢（8MB 的片子要十几分钟），单次长请求经常中途断。
+ * 策略：Range 分块续传（服务端实测支持 206 + accept-ranges: bytes）+ 失败重试。
+ * ⚠️ 服务端 HEAD 返回 405，不能用 HEAD 探大小；从首次响应的 content-range 里拿 total。
+ */
+export async function mirrorVeda(jobId, url, fp = null) {
   const day = new Date().toISOString().slice(0, 10);
   const dir = path.join(ASSET_DIR, day);
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, `veda-${jobId}.mp4`);
 
-  const res = await fetch(url, {
-    headers: { "user-agent": UA, accept: "video/mp4,*/*", referer: VEDA.origin + "/" },
-    signal: AbortSignal.timeout(10 * 60_000),
-  });
-  if (!res.ok) throw new VedaError(`产物下载失败 ${res.status}`, { code: "mirror_failed", status: res.status });
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length < 1024) throw new VedaError(`产物异常（${buf.length}B）`, { code: "mirror_failed" });
-  await fs.writeFile(file, buf);
-  return { file, bytes: buf.length, rel: `${day}/veda-${jobId}.mp4` };
+  const baseHeaders = {
+    "user-agent": UA,
+    accept: "video/mp4,*/*",
+    referer: VEDA.origin + "/",
+    ...(fp
+      ? { "x-fp": fp } // 池模式：只带 X-Fp，绝不带 cookie（带旧 cookie 会把请求吸附回 cookie 身份的池）
+      : {}),
+  };
+
+  let have = 0;
+  let total = 0;
+  for (let i = 0; i < 120; i++) {
+    const headers = { ...baseHeaders };
+    if (have > 0) headers.range = `bytes=${have}-`;
+    let buf = null;
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(4 * 60_000) });
+      if (!res.ok && res.status !== 206) {
+        throw new VedaError(`产物下载失败 ${res.status}`, { code: "mirror_failed", status: res.status });
+      }
+      const cr = res.headers.get("content-range");
+      if (cr) total = Number(cr.split("/")[1]) || total;
+      if (have > 0 && res.status === 200) {
+        // 服务端不支持续传、每次都回全量 → 直接重写文件，不能追加
+        await fs.writeFile(file, Buffer.alloc(0));
+        have = 0;
+      }
+      buf = Buffer.from(await res.arrayBuffer());
+    } catch (e) {
+      if (i >= 119) throw e;
+      await new Promise((r) => setTimeout(r, 2500));
+      continue;
+    }
+    if (!buf.length) {
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    await fs.appendFile(file, buf);
+    have += buf.length;
+    if (total && have >= total) break;
+  }
+  const bytes = (await fs.stat(file)).size;
+  if (bytes < 1024) throw new VedaError(`产物异常（${bytes}B）`, { code: "mirror_failed" });
+  return { file, bytes, rel: `${day}/veda-${jobId}.mp4` };
 }
