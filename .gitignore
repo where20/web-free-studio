@@ -15,5 +15,4 @@ data/daemon.err.log
 data/accounts/
 mcp/node_modules/
 mcp/.npmignore
-siftq.device.json
 data/veda.fp-pool.json
