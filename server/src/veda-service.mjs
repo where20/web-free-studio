@@ -253,14 +253,17 @@ export async function vedaGenerate(input) {
 
   // 从池里取一个可用指纹：本任务的提交/轮询/下载全程绑定它
   const slot = await fpPool.acquire();
-  const sub = await vedaSubmit({ ...input, fp: slot.fp });
+  let sub;
+  try {
+    sub = await vedaSubmit({ ...input, fp: slot.fp });
+  } catch (e) {
+    // 提交失败 → 立即释放并发占位，避免池被占死（额度已扣由上游/账本另行处理）
+    await fpPool.release(slot.id).catch(() => {});
+    throw e;
+  }
   const jobId = sub.job_id;
   if (!jobId) {
-    // 提交失败 → 退回这次 acquire 的占位，避免池空转
-    const pools = await fpPool.load();
-    const p = pools.find((x) => x.id === slot.id);
-    if (p) p.issued = Math.max(0, (p.issued || 1) - 1);
-    await fpPool.save();
+    await fpPool.release(slot.id).catch(() => {});
     throw new VedaError("上游没有返回 job_id", { code: "upstream_error", body: sub });
   }
 
@@ -325,8 +328,16 @@ export async function vedaSyncJob(upstreamId) {
     row.step !== prev.step ||
     row.queuePosition !== prev.queuePosition;
 
-  const merged = await upsertTask({ ...row, asset: prev.asset || null, jobId: prev.jobId || null });
-  if (changed) emit("task", { provider: "veda", upstreamId, status: merged.status, stage: merged.stage });
+  const merged0 = await upsertTask({ ...row, asset: prev.asset || null, jobId: prev.jobId || null });
+  if (changed) emit("task", { provider: "veda", upstreamId, status: merged0.status, stage: merged0.stage });
+
+  // 任务终态 → 释放指纹池并发占位（一次性：fpReleased 标记防重复释放）
+  // 不修这个的话 perPool=1 的池提交一条后永久 too_many_pending（issued 从不回收）
+  let merged = merged0;
+  if (isTerminal(merged0.status) && merged0.fpPoolId != null && !prev.fpReleased) {
+    await fpPool.release(merged0.fpPoolId).catch(() => {});
+    merged = await upsertTask({ ...merged0, fpReleased: true });
+  }
 
   if (merged.status === "done" && !merged.asset?.video) {
     const url = pickVideoUrl(job);

@@ -8,10 +8,10 @@
  *   · 提交后才绑定 24h 窗口（首次 GET quota 返回 window_start:null 是未绑定态）
  *   · 池间互不影响；已排除 veda_did / X-Device-Id / XFF / 出口 IP（均无效）
  *
- * 诚实边界：
- *   · 官方前端一次只用一个稳定指纹（真实浏览器指纹不变），20 点/天是给普通用户的设计
- *   · 指纹是客户端可控的分组键，多指纹 = 多「设备」并行使用官方 Demo
- *   · 默认池 = 1（与官方行为一致），扩池需要显式配置 VEDA_FP_POOL_SIZE
+ * 红线（2026-11-17 用户确认）：
+ *   · 指纹是客户端可控的分组键，多指纹 = 多「设备」并行刷额度 —— 不做
+ *   · 池数量硬上限 size（默认 1 = 官方单设备行为），扩池只能显式设 VEDA_FP_POOL_SIZE
+ *   · acquire() 绝不自动铸新指纹：全部池额度耗尽时如实报 quota_exhausted，等 24h 窗口恢复
  *   · 状态里如实标注池来源与用量，不做隐瞒
  *
  * 真实瓶颈不是额度，是 GPU 槽位：上游 2×RTX 4090，slots_total=2。
@@ -121,7 +121,15 @@ export class VedaFpPool {
     }
   }
 
-  /** 取一个可用池（issued < perPool 且服务端没报 0 余额）；全满则自动扩一个新池 */
+  /**
+   * 取一个可用池（issued < perPool 且服务端没报 0 余额）。
+   *
+   * 红线（2026-11-17 与用户确认）：**绝不自动铸造新指纹**。
+   * 多指纹 = 多「设备」并行刷额度，属规避上游访问控制 —— 与 Paba 的
+   * 「不做 XFF/指纹轮换刷额度」同一边界。池数量硬上限 = size（默认 1，
+   * 与官方单设备行为一致）；扩池只能显式设 VEDA_FP_POOL_SIZE，代码不自动越界。
+   * 额度耗尽 → 如实报 quota_exhausted 等 24h 窗口恢复；吞吐瓶颈本来就是 GPU 槽位。
+   */
   async acquire(perPool = this.perPool) {
     const pools = await this.load();
     const limit = Math.max(1, Number(perPool) || 1);
@@ -134,6 +142,17 @@ export class VedaFpPool {
         await this.save();
         return { id: p.id, fp: p.fp };
       }
+    }
+    if (pools.length >= this.size) {
+      // remaining 严格 ===0 才判「额度耗尽」（null/undefined = 未知，保守按在途满处理）
+      const exhausted = pools.length > 0 && pools.every((p) => p.remaining === 0);
+      const err = new Error(
+        exhausted
+          ? `Veda 额度已用尽（指纹池 ${pools.length}/${this.size} 全部 remaining=0）。等 24h 窗口恢复；扩池（多指纹=多设备并行）属刷额度行为，不做。`
+          : `Veda 指纹池在途已满（每池并发上限 ${limit}）。等出片再提交。`,
+      );
+      err.code = exhausted ? "quota_exhausted" : "too_many_pending";
+      throw err;
     }
     const p = {
       id: pools.length,
@@ -170,6 +189,17 @@ export class VedaFpPool {
     return pools[0]?.fp || null;
   }
 
+  /** 任务终态后释放该池的并发占位（幂等；issued 只减不增，减到 0 为止） */
+  async release(id) {
+    const pools = await this.load();
+    const p = pools.find((x) => x.id === id);
+    if (!p) return;
+    if ((p.issued || 0) > 0) {
+      p.issued -= 1;
+      await this.save();
+    }
+  }
+
   /** 状态快照（供 UI 展示；fp 只给前 12 位，完整指纹不外泄） */
   async snapshot() {
     const pools = await this.load();
@@ -182,26 +212,5 @@ export class VedaFpPool {
       remaining: p.remaining,
       resetsAt: p.resetsAt,
     }));
-  }
-
-  /** 调整池数量（扩容新指纹 = 新额度池；缩容直接截断） */
-  async resize(size) {
-    const want = Math.max(1, Number(size) || 1);
-    this.size = want; // ⚠️ 必须先设 size 再 load()：load() 按 this.size 补齐
-    const pools = await this.load();
-    while (pools.length < want) {
-      pools.push({
-        id: pools.length,
-        fp: makeFingerprint(),
-        used: 0,
-        issued: 0,
-        limit: 0,
-        remaining: null,
-        resetsAt: null,
-      });
-    }
-    if (pools.length > want) pools.length = want;
-    await this.save();
-    return pools.map((p) => ({ id: p.id, fp: p.fp.slice(0, 12) + "…" }));
   }
 }

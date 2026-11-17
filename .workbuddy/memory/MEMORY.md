@@ -44,6 +44,7 @@
 ## 边界（多次确认过，别再提）
 
 - **不做**代理池/换出口 IP 刷 Veda 额度、不做设备指纹伪造、不伪造 XFF、不铸造/轮换匿名身份刷 SiftQ 额度——技术上可行但属规避访问控制。用户问过三次 Veda + 一次 SiftQ（给仓库链接要"照搬绕限额"），都已拒绝并给正路。
+- **Veda 指纹池红线（2026-11-17 用户确认）**：X-Fp 是额度分组键，多指纹 = 多「设备」并行刷额度，**不做**。`veda-fp-pool.mjs` 池数量硬上限 `size`（默认 1 = 官方单设备），`acquire()` 绝不自动铸新指纹（额度耗尽如实报 quota_exhausted 等 24h 窗口）；运行时扩池入口 `resize()` 已删；扩池只能显式改 `VEDA_FP_POOL_SIZE`（配置是用户自己的决定，代码永不越界）。终态必须 `release()` 占位，否则 perPool=1 的池一条后永久占死。红线单测 `test/veda-fp-pool.test.mjs`。
 - SiftQ 只接正向协议：固定单一本地身份、真实出口 IP、429 如实上报。参考仓库 HaizhuAI/HaizhuVideo-H3Gateway 的核心是伪造 XFF + 身份轮换，**那部分没融合**。
 - 正路：① 邮件向作者要 **unlock key**（Veda 站点自带 `/api/unlock {key}`，官方机制）→ xinting@ustc.edu.cn / xjqi@hku.hk；② 项目开源可自部署（`github.com/veda-sparse/Veda-on-ComfyUI` + HF `Veda-Sparse`）；③ 向 SiftQ/MiniMax 官方申请提额；④ 排产自动化。
 
