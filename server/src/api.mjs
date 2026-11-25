@@ -31,6 +31,7 @@ import { Page, sleep } from "./cdp.mjs";
 import { vedaOverview, vedaGenerate, vedaSyncAll, vedaCancelJob } from "./veda-service.mjs";
 import { siftqOverview, siftqGenerate, siftqSyncAll } from "./siftq-service.mjs";
 import { dreaminaOverview, dreaminaGenerate, dreaminaSyncAll } from "./dreamina-service.mjs";
+import { buildVoiceover } from "./providers/voiceover.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -591,8 +592,14 @@ export function createServer() {
         return json(res, 200, await siftqSyncAll());
       }
 
-      /* ---------- 即梦 Dreamina（agent 短剧会话通道，独立模块） ---------- */
-      if (p === "/api/dreamina/state") return json(res, 200, await dreaminaOverview());
+      /* ---------- 口播文案生成（本地规则拼接，零依赖，不调外部 AI） ---------- */
+      if (p === "/api/voiceover" && req.method === "POST") {
+        const body = await readBody(req);
+        const out = buildVoiceover(body.prompt, { duration: body.duration, tone: body.tone });
+        return json(res, 200, out);
+      }
+
+      /* ---------- 即梦 Dreamina（agent 短剧会话通道，独立模块） ---------- */      if (p === "/api/dreamina/state") return json(res, 200, await dreaminaOverview());
 
       if (p === "/api/dreamina/generate" && req.method === "POST") {
         const body = await readBody(req);

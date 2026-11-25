@@ -1,0 +1,65 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  detectCategory,
+  extractSellingPoints,
+  extractSubject,
+  buildVoiceover,
+} from "../server/src/providers/voiceover.mjs";
+
+test("品类识别：命中关键词归到对应品类", () => {
+  assert.equal(detectCategory("快餐店餐桌旁的汉堡套餐"), "food");
+  assert.equal(detectCategory("一瓶精华液置于大理石台面"), "beauty");
+  assert.equal(detectCategory("唐装少女在门廊前起舞"), "fashion");
+  assert.equal(detectCategory("猫粮和猫砂放在角落"), "pet");
+  assert.equal(detectCategory("完全无关的抽象描述"), "general");
+});
+
+test("品类识别：长词优先，避免单字误伤（包邮不判成服饰、预制菜判美食）", () => {
+  assert.equal(detectCategory("预制菜礼盒，顺丰包邮，现做现发"), "food"); // 不能因"包邮"判成服饰
+  assert.equal(detectCategory("餐桌旁的水杯，清洁方便"), "home"); // 餐桌/水杯归一
+  assert.equal(detectCategory("连衣裙顺丰包邮"), "fashion");
+});
+
+test("卖点提取：价格/数量/优惠/品质", () => {
+  const sp = extractSellingPoints("现在只要64.8元，整整7+3的组合份，足足有4个汉堡，限时包邮，真材实料");
+  assert.equal(sp.price, "64.8元");
+  assert.equal(sp.count, "4个");
+  assert.ok(sp.perks.includes("限时"));
+  assert.ok(sp.perks.includes("包邮"));
+  assert.ok(sp.quality.includes("真材实料"));
+});
+
+test("主体提取：取第一小句且去掉运镜词", () => {
+  const s = extractSubject("镜头缓慢推近，一位少女身着唐装，背景宫灯流转");
+  assert.ok(!s.includes("镜头"));
+  assert.ok(!s.includes("推近"));
+  assert.ok(s.length <= 24);
+});
+
+test("口播生成：含品类、卖点、号召，字数不超预算太多", () => {
+  const out = buildVoiceover("快餐店汉堡套餐，只要64.8元，4个汉堡，限时包邮", { duration: 10 });
+  assert.equal(out.category, "food");
+  assert.ok(out.text.length > 0);
+  assert.ok(/64\.8|4个|限时|包邮/.test(out.text), "应包含至少一个卖点");
+  assert.ok(out.chars <= out.budget + 12, `字数 ${out.chars} 不应远超预算 ${out.budget}`);
+});
+
+test("口播生成：稳定（同输入同输出）", () => {
+  const a = buildVoiceover("猫粮，限时活动价", { duration: 10 });
+  const b = buildVoiceover("猫粮，限时活动价", { duration: 10 });
+  assert.equal(a.text, b.text);
+});
+
+test("口播生成：短时长字数更少", () => {
+  const short = buildVoiceover("汉堡套餐只要9.9元，限时包邮", { duration: 5 });
+  const long = buildVoiceover("汉堡套餐只要9.9元，限时包邮", { duration: 15 });
+  assert.ok(short.text.length <= long.text.length + 5);
+  assert.ok(short.budget < long.budget);
+});
+
+test("口播生成：空 prompt 不崩，退回通用模板", () => {
+  const out = buildVoiceover("", { duration: 10 });
+  assert.equal(out.category, "general");
+  assert.ok(out.text.length > 0);
+});

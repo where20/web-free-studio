@@ -176,6 +176,7 @@
   .plat-group::after{content:"";flex:1;height:1px;background:var(--line)}
   /* 提示词模板 */
   .prompt-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .ph-actions{display:flex;gap:6px}
   .tpl-toggle{border:1px solid var(--line);background:#fff;color:var(--brand);font-size:12px;padding:4px 10px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
   .tpl-toggle:hover{border-color:var(--brand)}
   .tpl-toggle .caret{font-size:10px;transition:transform .15s}
@@ -221,7 +222,10 @@
 
       <div class="prompt-head">
         <label class="f" style="margin:0">画面描述（prompt）</label>
-        <button class="tpl-toggle" id="tplToggle" type="button">✨ 模板 <span class="caret">▾</span></button>
+        <div class="ph-actions">
+          <button class="tpl-toggle" id="voBtn" type="button" title="根据上方提示词生成口播文案（追加到 prompt）">🎙 生成口播</button>
+          <button class="tpl-toggle" id="tplToggle" type="button">✨ 模板 <span class="caret">▾</span></button>
+        </div>
       </div>
       <div class="tpl-panel" id="tplPanel" hidden>
         <div class="tpl-list" id="tplList"></div>
@@ -746,6 +750,9 @@ function setSource(src) {
   // 切平台时刷新模板列表（面板开着就立即更新）
   if (typeof renderTemplates === "function" && !$("tplPanel").hidden) renderTemplates();
   else if (typeof renderTemplates === "function") renderTemplates();
+  // 口播按钮：SiftQ 图生视频（英文动作 prompt）不适合口播，隐藏
+  const voBtn = $("voBtn");
+  if (voBtn) voBtn.hidden = src === "siftq";
 }
 document.querySelectorAll("#sourceSeg button").forEach((b) => { b.onclick = () => setSource(b.dataset.src); });
 
@@ -1834,6 +1841,31 @@ $("pabaFields").hidden = SOURCE !== "paba";
     if (open) renderTemplates();
   };
   renderTemplates();
+})();
+
+// 生成口播文案（本地规则拼接，追加到 prompt 末尾的「口播：」段）
+(function initVoiceover() {
+  const btn = $("voBtn");
+  if (!btn) return;
+  btn.onclick = async () => {
+    const ta = $("prompt");
+    const prompt = (ta.value || "").trim();
+    if (!prompt) return toast("先在画面描述里写点内容，再生成口播", true);
+    btn.disabled = true; const old = btn.textContent; btn.textContent = "生成中…";
+    try {
+      const out = await api("/api/voiceover", {
+        method: "POST",
+        body: JSON.stringify({ prompt, duration: Number($("duration").value) || 10 }),
+      });
+      // 已有「口播：」段则替换，否则追加
+      const marker = "口播：";
+      const base = ta.value.split(marker)[0].trimEnd();
+      ta.value = `${base}\n${marker}${out.text}`;
+      ta.focus();
+      toast(`已生成口播（${out.categoryLabel} · ${out.chars}字），可直接改`);
+    } catch (e) { toast(e.message, true); }
+    finally { btn.disabled = false; btn.textContent = old; }
+  };
 })();
 
 refresh().then(connect).catch((e) => toast("加载失败：" + e.message, true));
