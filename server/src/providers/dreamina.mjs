@@ -240,8 +240,15 @@ export function findRun(thread, runId) {
       }
     }
   }
-  // run.state: 1=排队 2=生成中 3=完成 9=需要用户补充信息(问答终态)
+  // run.state: 1=排队 2=生成中 3=已结束 4=失败 9=需要用户补充信息(问答终态)
   const state = run.state;
+
+  // fail_reason 可能是字符串，也可能是对象（实测 busy/429 时是
+  // { code:10001, message:"The server is busy...", detail:"... llm gateway HTTP 429 ..." }）。
+  // 直接拿对象去 test 会漏判，必须先把文本抽出来。
+  const rawFail = run.fail_reason;
+  const failText = normalizeFailReason(rawFail) || errorText || null;
+
   // 找 agent 的反问文本（state=9 时没有视频产物）
   let question = null;
   if (state === 9) {
@@ -250,21 +257,45 @@ export function findRun(thread, runId) {
       if (c?.data) { question = String(c.data).slice(0, 500); break; }
     }
   }
+
+  // state=3 只代表 run 结束，不代表成功：
+  // 实测有「state=3 + 有 artifact_id + 文案写着视频生成失败」的情况（限流），
+  // 这种不能贴 done，否则会一直卡在「已完成但没有产物」。
+  const looksFailed = Boolean(failText) && /失败|fail|error|busy|rate limit|429|超出限制/i.test(failText);
+  let status;
+  if (state === 9) status = "needs_input";
+  else if (state === 4 || looksFailed) status = "failed";
+  else if (state === 3) status = "done";
+  else status = "running";
+
   return {
     runId: run.run_id,
     state,
-    status:
-      state === 3 ? "done"
-        : state === 9 ? "needs_input"
-          : /fail|cancel/i.test(run.fail_reason || "") ? "failed"
-            : "running",
-    artifactId,
-    failReason: run.fail_reason || errorText,
-    question,
+    status,
+    artifactId: status === "failed" ? null : artifactId,
+    failReason: failText,
+    question: status === "failed" ? null : question,
     completedAt: run.completed_at ? Number(run.completed_at) * 1000 : null,
     createdAt: run.created_at ? Number(run.created_at) * 1000 : null,
     entries: entries.length,
   };
+}
+
+/**
+ * 把上游 fail_reason 归一化成一句中文可读原因。
+ * 上游常见：{code:10001, message:"The server is busy. Please try again later.",
+ *           detail:"... llm gateway HTTP 429"} —— 本质是 agent 的 LLM 网关限流，
+ * 并发提交多条时几乎必现，要明确告诉用户「等一会儿再试、别并发」。
+ */
+export function normalizeFailReason(raw) {
+  if (!raw) return null;
+  const text = typeof raw === "string" ? raw : String(raw.message || raw.fallback_message || raw.detail || "");
+  const detail = typeof raw === "object" ? String(raw.detail || "") : "";
+  const all = `${text} ${detail}`;
+  if (/429|busy|rate limit|频率|超出限制|too many/i.test(all)) {
+    return "上游繁忙（即梦 agent 的 LLM 网关限流 429）：同一时间提交太多条，等几分钟再试，建议一次只跑 1 条";
+  }
+  return text ? text.slice(0, 300) : null;
 }
 
 /** 用 artifact_id 查视频直链与元数据 */
@@ -297,7 +328,7 @@ export async function queryArtifact(lane, artifactId) {
 }
 
 /** 任务行归一化（统一任务库字段） */
-const STATE_LABEL = { 1: "排队", 2: "生成中", 3: "已完成", 9: "待补充信息" };
+const STATE_LABEL = { 1: "排队", 2: "生成中", 3: "已完成", 4: "生成失败", 9: "待补充信息" };
 
 export function toTaskRow(snap) {
   return {

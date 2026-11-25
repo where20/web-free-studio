@@ -70,3 +70,36 @@ test("stale 视为终态，不再占在途槽位", () => {
   assert.equal(isTerminal("stale"), true);
   assert.equal(isTerminal("running"), false);
 });
+
+test("findRun：state=4 判失败；fail_reason 是对象时也要识别并归一化", () => {
+  const busy = {
+    code: 10001,
+    message: "The server is busy. Please try again later.",
+    detail: "agent execute failed: llm gateway HTTP 429",
+  };
+  const snap = findRun(
+    { run_list: [{ run_id: "r1", state: 4, entry_list: [], fail_reason: busy }] },
+    "r1",
+  );
+  assert.equal(snap.status, "failed");
+  assert.match(snap.failReason, /上游繁忙/);
+  assert.match(snap.failReason, /429|限流/);
+});
+
+test("findRun：state=3 但文案写着失败（限流）→ 不能当 done", () => {
+  const entries = [
+    { message: { role: "assistant", content: [{ type: "text", data: "视频生成失败：当前账号的请求频率超出限制。请稍后再试。" }] } },
+  ];
+  const snap = findRun({ run_list: [{ run_id: "r2", state: 3, entry_list: entries }] }, "r2");
+  assert.equal(snap.status, "failed");
+  assert.equal(snap.artifactId, null);
+});
+
+test("findRun：state=3 正常拿到产物 → done", () => {
+  const entries = [
+    { message: { role: "assistant", content: [{ sub_type: "biz/x_artifact_slots_part", data: JSON.stringify({ slots: [{ type: "video", artifact_id: "1501" }] }) }] } },
+  ];
+  const snap = findRun({ run_list: [{ run_id: "r3", state: 3, entry_list: entries }] }, "r3");
+  assert.equal(snap.status, "done");
+  assert.equal(snap.artifactId, "1501");
+});

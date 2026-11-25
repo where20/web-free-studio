@@ -183,6 +183,24 @@ export async function dreaminaSyncJob(upstreamId, accountId) {
   if (!prev) return null;
   if (isTerminal(prev.status) && prev.asset?.video) return prev;
 
+  // 收口：标了「已完成」但 3 次都拿不到产物直链 → 上游实际是失败的（限流/回收），
+  // 别再让它挂着「已完成但没有视频」，也别再反复重试。
+  if (prev.status === "done" && !prev.asset?.video && (prev.assetAttempts || 0) >= 3) {
+    const closed = await upsertTask({
+      ...prev,
+      status: "failed",
+      stage: "生成失败",
+      failReason: (typeof prev.failReason === "string" && prev.failReason)
+        || `3 次拿不到产物直链（${prev.assetError || "上游未给视频"}），判为失败`,
+      assetSkipUntil: 0,
+      finishedAt: prev.finishedAt || Date.now(),
+    });
+    await bumpUsage(accountId, "refund");
+    await logEvent("dreamina_failed", `[即梦] ${upstreamId} 无产物直链，收口判失败并退还额度`, { accountId }).catch(() => {});
+    emit("task", { provider: "dreamina", upstreamId, status: "failed" });
+    return closed;
+  }
+
   const account = await getAccount(accountId);
   if (!account) return prev;
   const threadId = account.dreaminaThreadId || DREAMINA.threadId;
@@ -241,11 +259,29 @@ export async function dreaminaSyncJob(upstreamId, accountId) {
       return done;
     } catch (e) {
       const attempts = (merged.assetAttempts || 0) + 1;
+      // 连续 3 次拿不到直链就不再死等：上游这条多半是失败的（限流/回收），
+      // 继续重试只会让它一直是「已完成但没有产物」的僵尸行。
+      if (attempts >= 3) {
+        await upsertTask({
+          ...merged,
+          status: "failed",
+          stage: "生成失败",
+          failReason: merged.failReason || `产物查不到视频直链（${e.message}），上游可能已失败或回收`,
+          assetAttempts: attempts,
+          assetError: e.message,
+          assetSkipUntil: 0,
+          finishedAt: Date.now(),
+        });
+        await bumpUsage(accountId, "refund");
+        await logEvent("dreamina_failed", `[即梦] ${upstreamId} 3 次拿不到产物直链，判失败并退还额度：${e.message}`, { accountId });
+        emit("task", { provider: "dreamina", upstreamId, status: "failed" });
+        return getTask({ accountId, upstreamId });
+      }
       await upsertTask({
         ...merged,
         assetAttempts: attempts,
         assetError: e.message,
-        assetSkipUntil: attempts >= 3 ? Date.now() + 30 * 60_000 : 0,
+        assetSkipUntil: Date.now() + 30 * 60_000,
       });
       await logEvent("dreamina_mirror_failed", `[即梦] ${upstreamId} 镜像失败（第 ${attempts} 次）：${e.message}`, { accountId });
     }
@@ -261,7 +297,8 @@ export async function dreaminaSyncAll() {
   const active = rows.filter((t) => !isTerminal(t.status) || (t.status === "done" && !t.asset?.video));
   let synced = 0;
   for (const t of active) {
-    if ((t.assetSkipUntil || 0) > Date.now()) continue;
+    // 退避中的任务先跳过；但「已试满 3 次仍无产物」的要放行去收口，别让它僵尸挂着
+    if ((t.assetSkipUntil || 0) > Date.now() && (t.assetAttempts || 0) < 3) continue;
     await dreaminaSyncJob(t.upstreamId, t.accountId);
     synced += 1;
     await sleep(300);
