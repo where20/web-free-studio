@@ -21,7 +21,7 @@ const CATEGORIES = [
   {
     id: "beauty",
     label: "美妆护肤",
-    words: ["精华液", "精华", "面霜", "口红", "粉底", "面膜", "护肤", "香水", "眼影", "修容", "防晒", "彩妆", "化妆品"],
+    words: ["精华液", "精华", "面霜", "口红", "粉底", "面膜", "护肤", "香水", "眼影", "修容", "防晒", "彩妆", "化妆品", "粉饼", "腮红", "眼线", "睫毛膏", "卸妆"],
   },
   {
     id: "fashion",
@@ -29,9 +29,19 @@ const CATEGORIES = [
     words: ["连衣裙", "裙子", "裤子", "鞋子", "球鞋", "上衣", "外套", "卫衣", "T恤", "唐装", "汉服", "穿搭", "背包", "手提包", "帽子", "围巾", "西装", "羽绒服"],
   },
   {
+    id: "accessory",
+    label: "饰品配饰",
+    words: ["耳环", "耳钉", "项链", "戒指", "手链", "手镯", "脚链", "发夹", "发箍", "胸针", "925银", "锁骨链", "吊坠", "珍珠项链"],
+  },
+  {
     id: "home",
     label: "家居日用",
-    words: ["餐桌", "椅子", "沙发", "收纳", "厨房", "清洁", "炒锅", "水杯", "台灯", "被子", "枕头", "床垫", "餐巾", "保温杯", "垃圾桶", "拖把"],
+    words: ["餐桌", "椅子", "沙发", "收纳", "厨房", "清洁", "炒锅", "水杯", "台灯", "被子", "枕头", "床垫", "餐巾", "保温杯", "垃圾桶", "拖把", "美甲桌", "梳妆台", "书桌", "置物架"],
+  },
+  {
+    id: "appliance",
+    label: "家电数码",
+    words: ["加湿器", "风扇", "净化器", "电饭煲", "空气炸锅", "扫地机", "吹风机", "咖啡机", "取暖器", "除湿机", "电动牙刷"],
   },
   {
     id: "digital",
@@ -47,6 +57,11 @@ const CATEGORIES = [
     id: "pet",
     label: "宠物用品",
     words: ["猫咪", "狗狗", "宠物", "猫粮", "狗粮", "猫砂", "猫抓板", "狗窝", "宠物零食"],
+  },
+  {
+    id: "toy",
+    label: "玩偶手办",
+    words: ["玩偶", "手办", "盲盒", "毛绒", "公仔", "潮玩", "积木", "模型", "羊毛毡", "挂件"],
   },
 ];
 
@@ -143,6 +158,21 @@ const PITCHES = {
     "用料干净，日常喂养很省心，",
     "性价比高，囤货也不心疼，",
   ],
+  accessory: [
+    "做工精致，细节耐看，戴上去很提气质，",
+    "材质有质感，日常佩戴不褪色不过敏，",
+    "搭配感很强，通勤约会都能搭，",
+  ],
+  appliance: [
+    "用起来很省心，日常家务轻松不少，",
+    "运行安静又稳定，细节设计很贴心，",
+    "性价比在线，家里有这个确实方便，",
+  ],
+  toy: [
+    "做工细腻，细节还原度很高，抱着很治愈，",
+    "材质手感好，摆着送人都拿得出手，",
+    "设计很有心意，喜欢的人会反复回购，",
+  ],
   general: [
     "品质在线，用下来体验很好，",
     "细节做得到位，性价比也高，",
@@ -194,6 +224,37 @@ export function extractSubject(prompt) {
     .slice(0, 24);
 }
 
+/**
+ * 整句都是"优惠/发货"类词（不含产品特征）的正则，用于过滤特征提取。
+ * 如"限时包邮""现做包邮""买一送一""顺丰包邮""限量发售"。
+ */
+const PERK_ONLY_RE = /^((限时|秒杀|满减|包邮|免配送|买一送一|第二件半价|活动价|折扣|优惠|顺丰|现做|现做现发|现货|限量|发售|发|热销|爆款|新品)[，、\s]*)+$/;
+
+/**
+ * 提取产品特征短语：把 prompt 除「第一小句(主体)」和「价格/数量/优惠/运镜」之外的
+ * 描述性短语留下来，当作产品的真实卖点（材质、功能、设计等）。
+ * 例："实木美甲桌，带收纳抽屉，限时包邮只要299元" → ["带收纳抽屉"]
+ */
+export function extractFeatures(prompt) {
+  const p = String(prompt || "").trim();
+  const clauses = p.split(/[，,。.;；\n]/).map((s) => s.trim()).filter(Boolean);
+  const features = [];
+  for (let i = 1; i < clauses.length; i++) {
+    let c = clauses[i];
+    // 去掉价格/数量/优惠等纯卖点词（这些由 spSentence 单独处理）
+    if (/^\d+(\.\d+)?\s*(元|块|块钱|毛)/.test(c) || /只要|仅需|售价/.test(c)) continue;
+    // 整句都是优惠词（含组合如"现做包邮""限时活动价"）→ 跳过
+    if (PERK_ONLY_RE.test(c)) continue;
+    // 去掉运镜/画面描述
+    c = c.replace(/镜头|运镜|特写|中景|近景|大全景|俯拍|仰拍|推近|环绕|跟随|慢镜|虚化|背景|光影|氛围|画面|主角|面对镜头/g, "").trim();
+    // 去掉句中夹带的优惠词尾巴（如"静音夜灯现做包邮" → "静音夜灯"）
+    c = c.replace(/(限时|秒杀|满减|包邮|免配送|买一送一|第二件半价|活动价|折扣|优惠|顺丰|现做现发|现货|限量发售)+$/g, "").trim();
+    c = c.replace(/^(只要|仅需|售价)/, "").trim();
+    if (c.length >= 2 && !/^\d+$/.test(c) && !features.includes(c)) features.push(c);
+  }
+  return features.slice(0, 3);
+}
+
 /** 中文口播语速约 4.5 字/秒，按目标时长给字数上限 */
 function budgetChars(durationSec) {
   const sec = Math.max(4, Math.min(30, Number(durationSec) || 10));
@@ -226,6 +287,10 @@ export function buildVoiceover(prompt, opts = {}) {
   const pitch = pick(pitches, 7);
   const cta = pick(tone.ctas, 13);
 
+  // 产品真实特征（来自提示词）：优先当产品描述，替代通用 pitch
+  const features = extractFeatures(prompt);
+  const featureBit = features.length ? `${features.join("，")}，` : "";
+
   // 卖点句：把提取到的价格/数量/优惠/品质拼进去
   const spParts = [];
   if (sp.quality.length) spParts.push(`${sp.quality.slice(0, 2).join("、")}`);
@@ -236,14 +301,15 @@ export function buildVoiceover(prompt, opts = {}) {
 
   const subjectBit = subject ? `${subject}，` : "";
 
-  // 拼装：按「信息价值」从高到低逐段添加，直到预算用满但整句不破
-  // 顺序：hook + 主体 + 卖点（核心）→ cta（号召）→ pitch（通用补充，最可省）
-  const core = `${hook}${subjectBit}${spSentence}`; // 核心信息
+  // 拼装：按「信息价值」从高到低逐段添加，直到预算用满但整句不破。
+  // 有真实特征时：hook + 主体 + 特征 + 卖点（核心）→ 号召；无特征才用通用 pitch 补。
+  const core = `${hook}${subjectBit}${featureBit}${spSentence}`;
+  const pitchExtra = features.length ? "" : pitch; // 有真实特征就不再塞通用模板
   const shortCta = (cta.split(/[，,。！!]/)[0] || cta) + "。"; // 超短号召（第一分句）
   const tail = [
-    `${core}${cta}`, // 1) 核心 + 完整 CTA
+    `${core}${pitchExtra}${cta}`, // 1) 核心(+pitch) + 完整 CTA
     `${core}${shortCta}`, // 2) 核心 + 超短 CTA
-    `${core}${pitch}${shortCta}`, // 3) 核心 + pitch + 超短 CTA（更长）
+    `${core}${pitchExtra}${shortCta}`, // 3) 核心(+pitch) + 超短 CTA
     `${core}`.replace(/，$/, "。"), // 4) 只有核心
   ];
   // 从"信息最完整且不超预算"的版本选；都超则选最短的核心
@@ -260,6 +326,7 @@ export function buildVoiceover(prompt, opts = {}) {
     chars: text.trim().length,
     budget,
     sellingPoints: sp,
+    features,
   };
 }
 

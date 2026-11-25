@@ -92,3 +92,30 @@ test("tone 参数生效：相同 prompt 不同语气，开场/号召不同", asy
   const bogus = buildVoiceover("猫粮", { duration: 10, tone: "xxx" });
   assert.equal(bogus.tone, "warm");
 });
+
+test("特征提取：真实产品特征进文案，不含纯优惠词", async () => {
+  const { extractFeatures, buildVoiceover } = await import("../server/src/providers/voiceover.mjs");
+  assert.deepEqual(extractFeatures("实木美甲桌，带收纳抽屉，限时包邮只要299元"), ["带收纳抽屉"]);
+  assert.deepEqual(extractFeatures("法式耳环，925银针，买一送一"), ["925银针"]);
+  assert.deepEqual(extractFeatures("手工羊毛毡小熊玩偶，限量发售"), []); // 限量发售是纯优惠
+  // 文案里必须出现真实特征
+  const v = buildVoiceover("实木美甲桌，带收纳抽屉，限时包邮只要299元", { duration: 15, tone: "warm" });
+  assert.ok(v.text.includes("带收纳抽屉"), "真实特征应进文案：" + v.text);
+});
+
+test("新品类识别：饰品/家电/玩偶", async () => {
+  const { detectCategory } = await import("../server/src/providers/voiceover.mjs");
+  assert.equal(detectCategory("法式耳环，925银针"), "accessory");
+  assert.equal(detectCategory("大容量加湿器，静音夜灯"), "appliance");
+  assert.equal(detectCategory("手工羊毛毡小熊玩偶"), "toy");
+});
+
+test("有真实特征时不再塞通用模板句（差异化）", async () => {
+  const { buildVoiceover } = await import("../server/src/providers/voiceover.mjs");
+  // 两个不同产品、同品类(home)，文案主体/特征必须不同
+  const a = buildVoiceover("实木书桌，带抽屉，包邮", { duration: 15, tone: "warm" });
+  const b = buildVoiceover("沙发，可拆洗，包邮", { duration: 15, tone: "warm" });
+  assert.notEqual(a.text, b.text);
+  assert.ok(a.text.includes("实木书桌"));
+  assert.ok(b.text.includes("沙发"));
+});
