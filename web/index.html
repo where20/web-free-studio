@@ -77,6 +77,15 @@
   .task .foot{display:flex;gap:6px;padding:0 11px 11px;flex:0 0 auto}
   .task .foot button{flex:1;padding:5px 6px;font-size:11.5px;border-radius:8px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .empty{padding:44px 16px;text-align:center;color:var(--sub)}
+  .pager{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;padding:16px 4px 4px}
+  .pager[hidden]{display:none}
+  .pager button{min-width:34px;height:32px;padding:0 10px;border-radius:9px;font-size:12.5px;color:var(--sub);background:#fff;border:1px solid var(--line);cursor:pointer;transition:all .14s ease}
+  .pager button:hover:not(:disabled):not(.on){border-color:var(--brand);color:var(--brand)}
+  .pager button.on{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+  .pager button:disabled{opacity:.4;cursor:not-allowed}
+  .pager .ellipsis{color:var(--sub);padding:0 2px;user-select:none}
+  .pager .pginfo{font-size:12px;color:var(--sub);margin-left:8px}
+  .pager select{width:auto;flex:0 0 auto;height:32px;border-radius:9px;border:1px solid var(--line);font-size:12.5px;color:var(--sub);padding:0 8px;background:#fff;cursor:pointer}
   .log{max-height:200px;overflow:auto;font:12px/1.7 var(--mono);padding:10px 16px;color:#4a5765}
   .log div{white-space:pre-wrap;word-break:break-all}
   .log .t{color:#98a2b3;margin-right:8px}
@@ -272,6 +281,7 @@
     <div class="body">
       <div class="tasks" id="tasks"></div>
       <div class="empty" id="empty" hidden>还没有记录。提交一条生成，或点「同步全部」拉取上游历史。</div>
+      <div class="pager" id="pager" hidden></div>
     </div>
   </section>
 </main>
@@ -423,6 +433,8 @@ let DREAMINA = null; // /api/dreamina/state 的快照
 let SOURCE = localStorage.getItem("fs.source") || "paba";
 let activeAccount = localStorage.getItem("fs.account") || "";
 let TASK_FILTER = localStorage.getItem("fs.taskFilter") || "all"; // all | paba | veda | siftq
+let TASK_PAGE = 1; // 当前页（1 基）
+let TASK_PAGE_SIZE = Number(localStorage.getItem("fs.pageSize")) || 6; // 每页条数（默认最新 6 条）
 
 function toast(msg, err = false) {
   const div = document.createElement("div");
@@ -576,6 +588,7 @@ document.querySelectorAll("#sourceSeg button").forEach((b) => { b.onclick = () =
 function setTaskFilter(f) {
   if (!["all", "paba", "veda", "siftq", "dreamina"].includes(f)) return;
   TASK_FILTER = f;
+  TASK_PAGE = 1; // 切平台回到第一页
   localStorage.setItem("fs.taskFilter", f);
   renderTasks();
 }
@@ -625,7 +638,7 @@ function renderForm() {
     m.innerHTML = `<option value="dreamina-novel">即梦 · AI 剧本编剧</option>`;
     r.innerHTML = PABA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
     d.min = 4; d.max = 15; d.step = 1;
-    $("prompt").placeholder = "即梦账号已接入，可在此管理登录态。生成端点待接入（当前未抓到上游提交接口），暂时不能提交生成。";
+    $("prompt").placeholder = "用中文自然语言描述画面/动作/镜头/声音，例如：橘猫在阳光窗台伸懒腰，毛发清晰，镜头缓慢推近，无台词。规格（时长/比例/分辨率）服务会自动加前缀。";
   } else {
     r.disabled = false;
     const models = STATE.models || [];
@@ -811,7 +824,13 @@ function renderTasks() {
     ? "还没有记录。提交一条生成，或点「同步全部」拉取上游历史。"
     : `当前没有 ${{ veda: "Veda Studio", siftq: "SiftQ", dreamina: "即梦", paba: "PabaTV" }[TASK_FILTER] || "该平台"} 的记录，切到「全部」查看其他平台。`;
   box.innerHTML = "";
-  for (const t of tasks.slice(0, 120)) {
+  const pageSize = TASK_PAGE_SIZE > 0 ? TASK_PAGE_SIZE : 6;
+  const totalPages = Math.max(1, Math.ceil(tasks.length / pageSize));
+  if (TASK_PAGE > totalPages) TASK_PAGE = totalPages;
+  if (TASK_PAGE < 1) TASK_PAGE = 1;
+  const start = (TASK_PAGE - 1) * pageSize;
+  const pageTasks = tasks.slice(start, start + pageSize);
+  for (const t of pageTasks) {
     const el = document.createElement("div");
     el.className = "task";
     const isVeda = isVedaTask(t);
@@ -887,6 +906,43 @@ function renderTasks() {
     };
     box.appendChild(el);
   }
+  renderPager(tasks.length, totalPages, pageSize, start, pageTasks.length);
+}
+
+function renderPager(total, totalPages, pageSize, start, shown) {
+  const box = $("pager");
+  if (!box) return;
+  if (total <= pageSize) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  const cur = TASK_PAGE;
+  const btn = (label, page, opts = {}) =>
+    `<button ${opts.on ? 'class="on"' : ""} ${opts.disabled ? "disabled" : ""} data-page="${page ?? ""}">${label}</button>`;
+  // 页码序列：首页 … 当前±1 … 末页
+  const nums = new Set([1, totalPages, cur, cur - 1, cur + 1]);
+  const list = [...nums].filter((n) => n >= 1 && n <= totalPages).sort((a, b) => a - b);
+  let numsHtml = "";
+  let prev = 0;
+  for (const n of list) {
+    if (prev && n - prev > 1) numsHtml += `<span class="ellipsis">…</span>`;
+    numsHtml += btn(n, n, { on: n === cur, disabled: n === cur });
+    prev = n;
+  }
+  box.innerHTML = `
+    ${btn("‹ 上一页", cur - 1, { disabled: cur <= 1 })}${numsHtml}${btn("下一页 ›", cur + 1, { disabled: cur >= totalPages })}
+    <span class="pginfo">第 ${cur}/${totalPages} 页 · 共 ${total} 条</span>
+    <select id="pageSizeSel">${[6, 12, 24, 48, 96].map((n) => `<option value="${n}" ${n === pageSize ? "selected" : ""}>每页 ${n}</option>`).join("")}</select>`;
+  box.querySelectorAll("button[data-page]").forEach((b) => {
+    const pg = Number(b.dataset.page);
+    if (!pg || b.disabled) return;
+    b.onclick = () => { TASK_PAGE = pg; renderTasks(); $("tasks").scrollIntoView({ behavior: "smooth", block: "start" }); };
+  });
+  const sel = box.querySelector("#pageSizeSel");
+  if (sel) sel.onchange = () => {
+    TASK_PAGE_SIZE = Number(sel.value) || 6;
+    localStorage.setItem("fs.pageSize", String(TASK_PAGE_SIZE));
+    TASK_PAGE = 1;
+    renderTasks();
+  };
 }
 
 function renderLog() {
