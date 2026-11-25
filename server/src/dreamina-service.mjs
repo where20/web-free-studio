@@ -21,6 +21,8 @@ import {
   isTerminal,
   mirrorDreamina,
   normalizeResolution,
+  rankDreaminaAccounts,
+  coolingAccounts,
 } from "./providers/dreamina.mjs";
 
 const bad = (msg, extra = {}) => new DreaminaError(msg, { code: "validation", ...extra });
@@ -39,22 +41,30 @@ function fingerprint(input) {
   ]);
 }
 
-/** 取一个可用的 dreamina 账号（严格按 provider 隔离） */
+/** 取一个可用的 dreamina 账号（严格按 provider 隔离；跳过冷却中的账号） */
 async function pickDreaminaAccount() {
-  const accounts = (await listAccounts()).filter(
-    (a) => (a.provider || "paba") === "dreamina" && a.status === "online" && !a.disabled,
-  );
-  if (!accounts.length) throw bad("没有在线的即梦账号，请先在账号池接管/导入登录态", { code: "no_account" });
-  // 在途少优先（简单均衡；后续可接 rankAccounts）
-  const scored = [];
-  for (const a of accounts) {
-    const active = (await listTasks({ accountId: a.id, limit: 200 })).filter((t) => !isTerminal(t.status)).length;
-    if (active >= DREAMINA.maxActive) continue;
-    scored.push({ account: a, active, last: a.lastSubmitAt || 0 });
+  const all = (await listAccounts()).filter((a) => (a.provider || "paba") === "dreamina");
+  const online = all.filter((a) => a.status === "online" && !a.disabled);
+  if (!online.length) throw bad("没有在线的即梦账号，请先在账号池接管/导入登录态", { code: "no_account" });
+
+  const activeById = {};
+  for (const a of online) {
+    activeById[a.id] = (await listTasks({ accountId: a.id, limit: 200 })).filter((t) => !isTerminal(t.status)).length;
   }
-  if (!scored.length) throw bad("所有即梦账号都在生成中，等出片再提交", { code: "too_many_pending" });
-  scored.sort((x, y) => x.active - y.active || x.last - y.last);
-  return scored[0].account;
+
+  const ranked = rankDreaminaAccounts(online, activeById, { maxActive: DREAMINA.maxActive });
+  if (ranked.length) return ranked[0];
+
+  // 都不可用：区分「全部冷却中」和「全部在生成中」，别只给一句模糊的报错
+  const cooling = coolingAccounts(online);
+  if (cooling.length === online.length) {
+    const mins = Math.max(1, Math.ceil(cooling[0].waitSec / 60));
+    throw bad(
+      `所有即梦账号都在限流冷却中（${cooling.map((c) => `${c.label} ${Math.ceil(c.waitSec / 60)}min`).join("、")}），约 ${mins} 分钟后可再提交；别急着连续重试，会延长冷却`,
+      { code: "cooldown" },
+    );
+  }
+  throw bad("所有即梦账号都在生成中，等出片再提交", { code: "too_many_pending" });
 }
 
 /** 今日提交条数（本地账本） */
@@ -82,6 +92,9 @@ export async function dreaminaOverview() {
       label: a.label,
       status: a.status,
       upstreamUserId: a.upstreamUserId,
+      threadBound: Boolean(a.dreaminaThreadId),
+      cooldownUntil: Number(a.cooldownUntil) > Date.now() ? Number(a.cooldownUntil) : null,
+      cooldownReason: Number(a.cooldownUntil) > Date.now() ? a.lastCooldownReason || "限流冷却" : null,
       submittedToday: a.status === "new" || a.status === "removed" ? 0 : null,
     }));
     out.session = {
@@ -134,6 +147,19 @@ export async function dreaminaGenerate(input) {
   await dreaminaPrecheck(input, account);
 
   const lane = laneFor(account);
+  // 多账号时每个号必须绑定自己的会话（thread 属于具体账号，借用别人的会 404 或串会话）
+  if (!account.dreaminaThreadId) {
+    const peers = (await listAccounts()).filter(
+      (a) => (a.provider || "paba") === "dreamina" && a.status === "online" && !a.disabled,
+    );
+    if (peers.length > 1) {
+      throw bad(
+        `账号「${account.label || account.id}」还没绑定自己的即梦会话（thread）。多账号必须各自绑定，否则会串会话/被上游拒绝。请在该账号接管时录入 agent_thread_id`,
+        { code: "no_thread" },
+      );
+    }
+  }
+
   // 从账号拿会话参数（如有），否则用配置默认
   const session = {
     projectId: account.dreaminaProjectId || DREAMINA.projectId,
@@ -149,6 +175,14 @@ export async function dreaminaGenerate(input) {
     if (e.code === "quota_exhausted") {
       await bumpUsage(account.id, "fail");
       throw bad(`即梦额度不足：${e.message}`, { code: "quota_exhausted" });
+    }
+    // 提交就撞上限流：同样给这个号上冷却，避免前端连点反复打
+    if (/429|繁忙|busy|频率|超出限制|rate limit/i.test(String(e.message || ""))) {
+      await upsertAccount({
+        ...account,
+        cooldownUntil: Date.now() + DREAMINA.accountCooldownMs,
+        lastCooldownReason: "429 限流（提交阶段）",
+      }).catch(() => {});
     }
     throw e;
   }
@@ -288,6 +322,16 @@ export async function dreaminaSyncJob(upstreamId, accountId) {
   } else if (changed && merged.status === "failed") {
     await bumpUsage(accountId, "refund");
     await logEvent("dreamina_failed", `[即梦] ${upstreamId} 失败：${merged.failReason || "上游未给原因"}`, { accountId });
+    // 限流类失败 → 这个号进冷却，后续提交自动切到别的号（多账号时才有意义）
+    if (/限流|429|繁忙|频率|超出限制/i.test(String(merged.failReason || ""))) {
+      const until = Date.now() + DREAMINA.accountCooldownMs;
+      const acct = await getAccount(accountId);
+      if (acct) {
+        await upsertAccount({ ...acct, cooldownUntil: until, lastCooldownReason: "429 限流" });
+        const mins = Math.round(DREAMINA.accountCooldownMs / 60000);
+        await logEvent("dreamina_account_cooldown", `[即梦] ${acct.label || accountId} 进入限流冷却 ${mins} 分钟，期间不再派活`, { accountId });
+      }
+    }
   }
   return merged;
 }

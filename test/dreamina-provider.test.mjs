@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { providerConfig, PROVIDERS } from "../server/src/config.mjs";
-import { findRun, isTerminal } from "../server/src/providers/dreamina.mjs";
+import { findRun, isTerminal, rankDreaminaAccounts, coolingAccounts } from "../server/src/providers/dreamina.mjs";
 
 test("默认 provider 是 paba，缺省/旧账号行为零变化", () => {
   assert.equal(providerConfig(undefined).id, "paba");
@@ -102,4 +102,46 @@ test("findRun：state=3 正常拿到产物 → done", () => {
   const snap = findRun({ run_list: [{ run_id: "r3", state: 3, entry_list: entries }] }, "r3");
   assert.equal(snap.status, "done");
   assert.equal(snap.artifactId, "1501");
+});
+
+test("账号池排序：在线未冷却 → 在途少 → 最久未用", () => {
+  const now = Date.now();
+  const accts = [
+    { id: "a", provider: "dreamina", status: "online", lastSubmitAt: 300 },
+    { id: "b", provider: "dreamina", status: "online", lastSubmitAt: 100 },
+    { id: "c", provider: "dreamina", status: "online", lastSubmitAt: 200 },
+  ];
+  // 都没在途：谁最久没提交谁先上
+  assert.deepEqual(rankDreaminaAccounts(accts, {}, { maxActive: 1, now }).map((a) => a.id), ["b", "c", "a"]);
+  // a 已有 1 条在途（maxActive=1）→ 排除
+  assert.deepEqual(rankDreaminaAccounts(accts, { a: 1 }, { maxActive: 1, now }).map((a) => a.id), ["b", "c"]);
+  // 多槽位时按在途数升序
+  assert.deepEqual(rankDreaminaAccounts(accts, { a: 1, b: 2 }, { maxActive: 3, now }).map((a) => a.id), ["c", "a", "b"]);
+});
+
+test("账号池排序：冷却中的号被跳过，冷却到期自动恢复", () => {
+  const now = 1_000_000;
+  const accts = [
+    { id: "hot", provider: "dreamina", status: "online", cooldownUntil: now + 60_000, lastSubmitAt: 0 },
+    { id: "cool", provider: "dreamina", status: "online", lastSubmitAt: 500 },
+  ];
+  assert.deepEqual(rankDreaminaAccounts(accts, {}, { maxActive: 1, now }).map((a) => a.id), ["cool"]);
+  // 到期后可再派
+  assert.equal(rankDreaminaAccounts(accts, {}, { maxActive: 1, now: now + 61_000 }).length, 2);
+  // 冷却摘要给出剩余秒数
+  const c = coolingAccounts(accts, now);
+  assert.equal(c.length, 1);
+  assert.equal(c[0].id, "hot");
+  assert.equal(c[0].waitSec, 60);
+});
+
+test("账号池排序：非即梦账号/离线/禁用一律不参与", () => {
+  const now = Date.now();
+  const accts = [
+    { id: "paba1", provider: "paba", status: "online" },
+    { id: "off", provider: "dreamina", status: "error" },
+    { id: "dis", provider: "dreamina", status: "online", disabled: true },
+    { id: "ok", provider: "dreamina", status: "online" },
+  ];
+  assert.deepEqual(rankDreaminaAccounts(accts, {}, { maxActive: 1, now }).map((a) => a.id), ["ok"]);
 });

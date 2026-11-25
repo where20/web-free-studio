@@ -83,6 +83,8 @@ export const DREAMINA = {
   // 同一 thread 并发提交会打爆 agent 的 LLM 网关（实测 HTTP 429 → 上游回
   // 「伺服器忙碌中，請稍後再試」/ The server is busy），默认串行只跑 1 条。
   maxActive: Number(process.env.DREAMINA_MAX_ACTIVE || 1),
+  // 账号被 LLM 网关 429 后的冷却时长：冷却期内不再往这个号派活，多账号时自动切下一个
+  accountCooldownMs: Number(process.env.DREAMINA_COOLDOWN_MS || 15 * 60_000),
   pollActiveMs: Number(process.env.DREAMINA_POLL_MS || 10_000),
   pollIdleMs: Number(process.env.DREAMINA_POLL_IDLE_MS || 60_000),
   // 会话级参数：默认取用户已建好的短剧会话，可用环境变量覆盖或未来接「新对话」端点自动创建

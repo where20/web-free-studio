@@ -379,3 +379,40 @@ export async function mirrorDreamina(upstreamId, art) {
 }
 
 export { DREAMINA };
+
+/**
+ * 账号池排序（纯函数，便于测试）。
+ *
+ * 为什么需要：即梦 agent 的限流打在「账号 × 频率」上，
+ * 一条 run 在 LLM 规划阶段被 429 后，该账号需要冷却一段时间，
+ * 否则后续提交会连着失败。多账号时应当自动切到没冷却的号。
+ *
+ * 规则：在线且未冷却 → 在途数最少 → 最久未用（lastSubmitAt 小）
+ * @param {Array} accounts 账号列表
+ * @param {Record<string, number>} activeById 各账号在途数
+ * @param {{maxActive?: number, now?: number}} opts
+ */
+export function rankDreaminaAccounts(accounts, activeById = {}, opts = {}) {
+  const maxActive = opts.maxActive ?? 1;
+  const now = opts.now ?? Date.now();
+  return (accounts || [])
+    .filter((a) => (a.provider || "paba") === "dreamina" && a.status === "online" && !a.disabled)
+    .filter((a) => !(Number(a.cooldownUntil) > now))
+    .map((a) => ({ account: a, active: Number(activeById[a.id] || 0), last: Number(a.lastSubmitAt || 0) }))
+    .filter((x) => x.active < maxActive)
+    .sort((x, y) => x.active - y.active || x.last - y.last)
+    .map((x) => x.account);
+}
+
+/** 冷却中的账号摘要：[{id,label,readyAt,waitSec}]，用于报错时告诉用户还要等多久 */
+export function coolingAccounts(accounts, now = Date.now()) {
+  return (accounts || [])
+    .filter((a) => Number(a.cooldownUntil) > now)
+    .map((a) => ({
+      id: a.id,
+      label: a.label,
+      readyAt: Number(a.cooldownUntil),
+      waitSec: Math.ceil((Number(a.cooldownUntil) - now) / 1000),
+    }))
+    .sort((x, y) => x.readyAt - y.readyAt);
+}

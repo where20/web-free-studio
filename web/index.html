@@ -569,7 +569,7 @@ function renderAccountItem(a) {
     <span class="dot ${a.status}"></span>
     <div class="meta">
       <div class="name">${a.label || a.id}${a.disabled ? " · 已停用" : ""}</div>
-      <div class="sub">${a.upstreamUserId || "未授权"} · 已消耗 <b>${used}</b>/${limit} 次 · 在途 ${a.active ?? 0}</div>
+      <div class="sub">${a.upstreamUserId || "未授权"} · 已消耗 <b>${used}</b>/${limit} 次 · 在途 ${a.active ?? 0}${a.cooldownUntil && a.cooldownUntil > Date.now() ? ` · <b style="color:#975a16">限流冷却 ${Math.ceil((a.cooldownUntil - Date.now()) / 60000)}min</b>` : ""}</div>
       <div class="bar"><i class="${used >= limit ? "full" : ""}" style="width:${pct}%"></i></div>
     </div>
     <div class="ops">
