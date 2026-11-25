@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { providerConfig, PROVIDERS } from "../server/src/config.mjs";
+import { findRun, isTerminal } from "../server/src/providers/dreamina.mjs";
 
 test("默认 provider 是 paba，缺省/旧账号行为零变化", () => {
   assert.equal(providerConfig(undefined).id, "paba");
@@ -49,4 +50,23 @@ test("两个平台的 cookie 不与对方域名串号", () => {
   assert.equal(PROVIDERS.dreamina.cookieDomainRe.test("www.paba.tv"), false);
   assert.equal(PROVIDERS.dreamina.cookieDomainRe.test("dreamina.capcut.com"), true);
   assert.equal(PROVIDERS.paba.cookieDomainRe.test("www.paba.tv"), true);
+});
+
+test("findRun 严格按 run_id 匹配：查不到就返回 null，不退回最后一条", () => {
+  const thread = {
+    run_list: [
+      { run_id: "old-1", state: 3, entry_list: [] },
+      { run_id: "new-2", state: 2, entry_list: [] },
+    ],
+  };
+  // 命中自己的 run
+  assert.equal(findRun(thread, "old-1").state, 3);
+  // 查不到不能拿最后一条顶替（否则老任务会显示新任务的状态 / 镜像别人的视频）
+  assert.equal(findRun(thread, "gone-3"), null);
+  assert.equal(findRun({ run_list: [] }, "any"), null);
+});
+
+test("stale 视为终态，不再占在途槽位", () => {
+  assert.equal(isTerminal("stale"), true);
+  assert.equal(isTerminal("running"), false);
 });

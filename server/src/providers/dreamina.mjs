@@ -200,19 +200,28 @@ export async function submitRun(lane, input, session = {}) {
   return { ...req, upstreamId: runId, raw: run };
 }
 
-/** 查会话状态：返回 run 列表（含 state / entry_list） */
+/** 查会话状态：返回 run 列表（含 state / entry_list）
+ *  limit 取大一些：thread 是同一个会话，历史 run 会越积越多，
+ *  取太小会导致老任务查不到自己那条 run。 */
 export async function getThread(lane, threadId = DREAMINA.threadId) {
   const url = `${DREAMINA.apiBase}${DREAMINA.paths.thread}`;
-  const body = { limit: 10, scopes: ["run_list.entry_list"], thread_id: threadId };
+  const body = { limit: 50, scopes: ["run_list.entry_list"], thread_id: threadId };
   const payload = await lane.exec(jsFetchExpr(url, { method: "POST", body }), 90_000);
   const data = dataFrom(payload, "查询会话");
   return data?.thread || {};
 }
 
-/** 在 thread 里找指定 run 的状态与 artifact_id */
+/**
+ * 在 thread 里找指定 run 的状态与 artifact_id。
+ *
+ * 必须严格匹配 run_id —— 早期实现找不到时退回「最后一条 run」，
+ * 结果老任务读到的是新任务的状态：永远显示「生成中」，
+ * 甚至会把别人的视频当自己的产物镜像下来（串号）。
+ * 找不到就返回 null，由调用方按「查不到」处理。
+ */
 export function findRun(thread, runId) {
   const runs = Array.isArray(thread?.run_list) ? thread.run_list : [];
-  const run = runs.find((r) => r.run_id === runId) || runs[runs.length - 1];
+  const run = runs.find((r) => String(r.run_id) === String(runId));
   if (!run) return null;
   const entries = Array.isArray(run.entry_list) ? run.entry_list : [];
   let artifactId = null;
@@ -305,7 +314,8 @@ export function toTaskRow(snap) {
 
 export function isTerminal(status) {
   // needs_input 是终态：agent 在反问用户，不会再自己产出视频，停止轮询
-  return ["done", "failed", "cancelled", "needs_input"].includes(status);
+  // stale 是终态：上游会话里已查不到这条 run，继续轮询没有意义
+  return ["done", "failed", "cancelled", "needs_input", "stale"].includes(status);
 }
 
 /** 下载视频直链：系统代理 + 浏览器 UA（直连/--noproxy 实测不通） */

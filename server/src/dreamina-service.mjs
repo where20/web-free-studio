@@ -196,9 +196,29 @@ export async function dreaminaSyncJob(upstreamId, accountId) {
     await upsertTask({ ...prev, lastError: e.message, lastErrorAt: Date.now(), pollErrors: (prev.pollErrors || 0) + 1 });
     return prev;
   }
-  if (!snap) return prev;
+  if (!snap) {
+    // 会话里查不到这条 run：可能被上游回收，也可能 thread 太老。
+    // 不能按「最后一条 run」猜状态 —— 连续 3 次查不到就标 stale 收口，
+    // 否则它会一直显示「生成中」并占住在途槽位。
+    const miss = (prev.missCount || 0) + 1;
+    const patch = {
+      ...prev,
+      missCount: miss,
+      lastError: "上游会话里查不到该 run",
+      lastErrorAt: Date.now(),
+    };
+    if (miss >= 3 && !isTerminal(prev.status)) {
+      patch.status = "stale";
+      patch.stage = "上游查不到";
+      patch.failReason = prev.failReason || "上游会话里找不到这条 run（可能已被回收），本地保留记录可手动删除";
+      patch.finishedAt = Date.now();
+      await logEvent("dreamina_stale", `[即梦] ${upstreamId} 上游会话查不到，标记 stale`, { accountId }).catch(() => {});
+      emit("task", { provider: "dreamina", upstreamId, status: "stale" });
+    }
+    return upsertTask(patch);
+  }
 
-  const row = { ...toTaskRow(snap), upstreamId, accountId, provider: "dreamina", prompt: prev.prompt };
+  const row = { ...toTaskRow(snap), upstreamId, accountId, provider: "dreamina", prompt: prev.prompt, missCount: 0 };
   const changed = row.status !== prev.status || row.stage !== prev.stage;
   const merged = await upsertTask({ ...row, asset: prev.asset || null });
   if (changed) emit("task", { provider: "dreamina", upstreamId, status: merged.status });
