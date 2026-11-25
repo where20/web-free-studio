@@ -11,6 +11,16 @@
 
 const CHINESE_RE = /[\u4e00-\u9fa5]/;
 
+/** 抽出台词正文（与 duration-plan.mjs 同口径：标签式 / 引号式） */
+function extractScript(prompt) {
+  const p = String(prompt || "");
+  const labeled = p.match(/(?:口播|台词|文案|旁白|说|唱)\s*(?:[（(][^）)]{0,24}[）)])?\s*[：:]\s*([^\n。]*[。！？!?]?)/);
+  if (labeled) return { text: labeled[1].trim() };
+  const quoted = p.match(/["“「]([^"”」]{4,})["”」]/);
+  if (quoted) return { text: quoted[1].trim() };
+  return { text: "" };
+}
+
 /** 统计中文字数（口播字数预算用） */
 function cnLen(s) {
   return (String(s).match(/[\u4e00-\u9fa5]/g) || []).length;
@@ -76,7 +86,8 @@ export function precheckPrompt(provider, input = {}) {
     // ② 口播意图但缺台词：prompt 提到口播/面对镜头/分享等，却没给具体台词 → agent 几乎必反问
     const wantsVoice = /口播|面对镜头|对镜头|分享|介绍|推荐|安利|旁白|讲解|台词|讲述|口述|卖点/.test(prompt);
     const hasScript =
-      /(口播|台词|文案|旁白|说)\s*[：:]/.test(prompt) || // 有「口播：xxx」段
+      // 「口播：xxx」，允许中间夹括号说明，如「口播台词（逐字口述、嘴型同步）：」
+      /(口播|台词|文案|旁白|说)\s*(?:[（(][^）)]{0,24}[）)])?\s*[：:]/.test(prompt) ||
       /["“「][^"”」]{4,}["”」]/.test(prompt) || // 有引号包住的台词
       /唱[：:]/.test(prompt); // 有「唱：xxx」
     if (wantsVoice && !hasScript) {
@@ -84,8 +95,11 @@ export function precheckPrompt(provider, input = {}) {
     }
 
     // ③ 文案 / 台词 相对时长偏长 → 可能说不完或语速过快
-    if (input.duration && cn > Number(input.duration) * 4.5 + 40) {
-      add("warn", `文案约 ${cn} 字，按 ${input.duration}s 口播（~4.5 字/秒）偏长，可能说不完或语速过快`);
+    //    有台词段就只算台词本身（画面描述不占口播时间），否则退回全篇字数
+    const scriptText = extractScript(prompt).text;
+    const spokenChars = scriptText ? cnLen(scriptText) : cn;
+    if (input.duration && spokenChars > Number(input.duration) * 4.5 + 40) {
+      add("warn", `${scriptText ? "台词" : "文案"}约 ${spokenChars} 字，按 ${input.duration}s 口播（~4.5 字/秒）偏长，可能说不完或语速过快`);
     }
 
     // ④ 时长过短却要复杂运镜/多镜头 → 容易跑偏

@@ -111,3 +111,23 @@ test("即梦：正常画面描述+时长 → 无 error/warn（可能仅 info）"
   assert.equal(r.ok, true);
   assert.notEqual(r.level, "error");
 });
+
+test("即梦：台词标签后夹括号说明（口播台词（逐字口述）：…）→ 不报缺台词", () => {
+  const r = precheckPrompt("dreamina", {
+    prompt: "女主坐在餐桌旁分享。口播台词（逐字自然口述、嘴型与台词同步）：这个套餐真的很实惠，满满一桌。",
+    duration: 14,
+  });
+  assert.ok(!r.issues.some((i) => /没写具体台词/.test(i.msg)), "括号说明不应导致漏判台词");
+});
+
+test("即梦：语速只算台词正文，不把画面描述算进去", () => {
+  const long = "明亮整洁的快餐店餐桌旁，".repeat(8) + "口播台词：这个套餐真的很实惠，两个人吃到撑。";
+  const r = precheckPrompt("dreamina", { prompt: long, duration: 14 });
+  assert.ok(!r.issues.some((i) => /偏长/.test(i.msg)), "画面描述不应计入语速");
+});
+
+test("即梦：台词本身超长仍要 warn", () => {
+  const script = "口播：" + "这个汉堡真的特别好吃肉质鲜嫩多汁配上脆爽生菜和特制酱料".repeat(4);
+  const r = precheckPrompt("dreamina", { prompt: script, duration: 10 });
+  assert.ok(r.issues.some((i) => /台词约/.test(i.msg) || /偏长/.test(i.msg)));
+});
