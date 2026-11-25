@@ -8,7 +8,7 @@
  */
 
 import { DREAMINA } from "./config.mjs";
-import { listAccounts, getAccount, upsertTask, getTask, listTasks, logEvent, bumpUsage, dayKey } from "./store.mjs";
+import { listAccounts, getAccount, upsertAccount, upsertTask, getTask, listTasks, logEvent, bumpUsage, dayKey } from "./store.mjs";
 import { emit } from "./events.mjs";
 import { laneFor } from "./lane.mjs";
 import {
