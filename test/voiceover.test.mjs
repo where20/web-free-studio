@@ -63,3 +63,32 @@ test("口播生成：空 prompt 不崩，退回通用模板", () => {
   assert.equal(out.category, "general");
   assert.ok(out.text.length > 0);
 });
+
+test("三种语气各出一版：都非空，语气标签/开场不同", async () => {
+  const { buildAllTones } = await import("../server/src/providers/voiceover.mjs");
+  const versions = buildAllTones("汉堡套餐，只要64.8元，4个汉堡，限时包邮", { duration: 15 });
+  assert.equal(versions.length, 3);
+  const tones = versions.map((v) => v.tone);
+  assert.deepEqual(tones, ["warm", "urgent", "calm"]);
+  for (const v of versions) {
+    assert.ok(v.text.length > 0);
+    assert.ok(v.toneLabel);
+  }
+  // 三条文案必须互不相同（语气差异）
+  const texts = new Set(versions.map((v) => v.text));
+  assert.equal(texts.size, 3, "三种语气应产出三条不同文案");
+});
+
+test("tone 参数生效：相同 prompt 不同语气，开场/号召不同", async () => {
+  const { buildVoiceover } = await import("../server/src/providers/voiceover.mjs");
+  const warm = buildVoiceover("猫粮，限时活动价", { duration: 15, tone: "warm" });
+  const urgent = buildVoiceover("猫粮，限时活动价", { duration: 15, tone: "urgent" });
+  const calm = buildVoiceover("猫粮，限时活动价", { duration: 15, tone: "calm" });
+  assert.equal(warm.tone, "warm");
+  assert.equal(urgent.tone, "urgent");
+  assert.notEqual(warm.text, urgent.text);
+  assert.notEqual(warm.text, calm.text);
+  // 未知 tone 回退 warm
+  const bogus = buildVoiceover("猫粮", { duration: 10, tone: "xxx" });
+  assert.equal(bogus.tone, "warm");
+});

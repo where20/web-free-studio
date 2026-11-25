@@ -50,80 +50,80 @@ const CATEGORIES = [
   },
 ];
 
-// 品类句式库（hook 开场 / pitch 卖点 / cta 号召）
-const PHRASES = {
-  food: {
-    hooks: ["我偷偷跟你说哦，", "真的别踩坑了，", "这个我必须安利一下，"],
-    pitches: [
-      "味道是真材实料，吃着就是过瘾，",
-      "分量给得足，一口下去满足感直接拉满，",
-      "用料实在不糊弄，越吃越上头，",
+/**
+ * 语气库：开场 hook + 号召 cta 按语气分（文案的「味」）。
+ * 品类卖点描述（pitches）另见 PITCHES，按品类分（文案的「肉」）。
+ */
+export const TONES = {
+  warm: {
+    label: "温柔安利",
+    hooks: ["我偷偷跟你说哦，", "这个我真的想安利给你，", "用了挺久，忍不住想分享，"],
+    ctas: [
+      "链接就在左下角，喜欢的话自己看看，不合适随时退，买着也放心。",
+      "有需要的点下方小黄车，慢慢挑不着急，回购的人挺多的。",
     ],
-    cta: ["链接就在左下角，刷到赶紧囤，不吃随时退，过期还能自动退。", "点下方小黄车带走，趁活动赶紧冲，手慢就没啦。"],
   },
-  beauty: {
-    hooks: ["姐妹们听我一句劝，", "用了这么多我真的想推这个，", "这个真的值得反复回购，"],
-    pitches: [
-      "上脸很服帖，肤感清透不闷，",
-      "成分扎实，坚持用下来状态肉眼可见地变好，",
-      "质地好用不搓泥，日常上妆前打底也稳，",
+  urgent: {
+    label: "急切促销",
+    hooks: ["别划走，这个真的要抢！", "就今天，错过真没了！", "刷到就是缘分，赶紧下手！"],
+    ctas: [
+      "限时活动就在左下角，手慢就没啦，刷到赶紧囤！",
+      "点下方小黄车马上抢，库存不多了，再犹豫就没了！",
     ],
-    cta: ["链接在左下角，想要同款的自己拍，用完回来谢我。", "点下方小黄车下单，今天还有活动价，别错过。"],
   },
-  fashion: {
-    hooks: ["这身真的绝了，", "姐妹们这套我太喜欢了，", "谁穿谁好看的那种，"],
-    pitches: [
-      "版型很正，上身显瘦还显气质，",
-      "面料有质感，不塌不皱，做工细节到位，",
-      "配色高级，日常通勤和出街都能打，",
+  calm: {
+    label: "冷静测评",
+    hooks: ["说句实在话，", "不吹不黑，客观聊聊，", "用下来总结一下，"],
+    ctas: [
+      "链接放在左下角，参数和真实评价自己对比看看，理性选择。",
+      "感兴趣的可以点下方链接，适合自己的才值得入手。",
     ],
-    cta: ["同款链接放左下角了，尺码齐全，喜欢的冲。", "点下方小黄车看详情，趁有活动价赶紧入。"],
   },
-  home: {
-    hooks: ["家里有这个真的省心，", "这个好物我用了很久才敢推，", "生活品质直接提升一档，"],
-    pitches: [
-      "用起来顺手又耐用，细节设计很贴心，",
-      "性价比很高，日常用下来省时省力，",
-      "材质扎实，做工在线，看着就放心，",
-    ],
-    cta: ["链接就在左下角，需要的话自己拍，早买早享受。", "点下方小黄车带走，家里缺这个的赶紧补上。"],
-  },
-  digital: {
-    hooks: ["这个真的有点东西，", "用过就知道值不值，", "参数党看过来，"],
-    pitches: [
-      "性能给得很足，日常使用流畅不卡，",
-      "做工和手感都在线，用着很舒服，",
-      "续航和体验都稳，通勤出差带着正好，",
-    ],
-    cta: ["链接在小黄车，想换设备的可以重点看看。", "点下方链接看详细参数，活动价很香，别犹豫。"],
-  },
-  baby: {
-    hooks: ["当妈的都知道这个有多重要，", "给宝宝用的东西不能将就，", "这个真的让带娃轻松不少，"],
-    pitches: [
-      "材质安全温和，宝宝用着放心，",
-      "设计贴心，日常用起来省心省力，",
-      "口碑一直很好，很多妈妈都在回购，",
-    ],
-    cta: ["链接放左下角了，有需要的宝妈直接拍。", "点下方小黄车，趁活动囤一点，用得上。"],
-  },
-  pet: {
-    hooks: ["养猫养狗的都懂，", "主子用过就回不去了，", "这个真的要给毛孩子安排上，"],
-    pitches: [
-      "品质放心，毛孩子爱吃爱用，",
-      "用料干净，日常喂养很省心，",
-      "性价比高，囤货也不心疼，",
-    ],
-    cta: ["链接在左下角，铲屎官们赶紧给主子囤起来。", "点下方小黄车带走，趁活动多备几份。"],
-  },
-  general: {
-    hooks: ["这个真的值得说一下，", "我不允许你还不知道，", "真心推荐给你，"],
-    pitches: [
-      "品质在线，用下来体验很好，",
-      "细节做得到位，性价比也高，",
-      "口碑一直不错，回购的人很多，",
-    ],
-    cta: ["链接就在左下角，感兴趣的自己看看。", "点下方小黄车了解详情，趁活动入手更划算。"],
-  },
+};
+export const TONE_IDS = Object.keys(TONES);
+
+// 品类卖点句（文案主体，按品类分）
+const PITCHES = {
+  food: [
+    "味道是真材实料，吃着就是过瘾，",
+    "分量给得足，一口下去满足感直接拉满，",
+    "用料实在不糊弄，越吃越上头，",
+  ],
+  beauty: [
+    "上脸很服帖，肤感清透不闷，",
+    "成分扎实，坚持用下来状态肉眼可见地变好，",
+    "质地好用不搓泥，日常上妆前打底也稳，",
+  ],
+  fashion: [
+    "版型很正，上身显瘦还显气质，",
+    "面料有质感，不塌不皱，做工细节到位，",
+    "配色高级，日常通勤和出街都能打，",
+  ],
+  home: [
+    "用起来顺手又耐用，细节设计很贴心，",
+    "性价比很高，日常用下来省时省力，",
+    "材质扎实，做工在线，看着就放心，",
+  ],
+  digital: [
+    "性能给得很足，日常使用流畅不卡，",
+    "做工和手感都在线，用着很舒服，",
+    "续航和体验都稳，通勤出差带着正好，",
+  ],
+  baby: [
+    "材质安全温和，宝宝用着放心，",
+    "设计贴心，日常用起来省心省力，",
+    "口碑一直很好，很多妈妈都在回购，",
+  ],
+  pet: [
+    "品质放心，毛孩子爱吃爱用，",
+    "用料干净，日常喂养很省心，",
+    "性价比高，囤货也不心疼，",
+  ],
+  general: [
+    "品质在线，用下来体验很好，",
+    "细节做得到位，性价比也高，",
+    "口碑一直不错，回购的人很多，",
+  ],
 };
 
 /** 识别品类：命中多个时，取「命中关键词最长」的品类（长词更具体、更可信） */
@@ -179,26 +179,28 @@ function budgetChars(durationSec) {
 /**
  * 主入口：生成口播文案
  * @param {string} prompt 视频画面提示词
- * @param {object} opts { duration, tone: "warm"|"urgent"|"calm", seed }
- * @returns {{ text, category, categoryLabel, chars, sellingPoints }}
+ * @param {object} opts { duration, tone: "warm"|"urgent"|"calm" }
+ * @returns {{ text, category, categoryLabel, tone, toneLabel, chars, budget, sellingPoints }}
  */
 export function buildVoiceover(prompt, opts = {}) {
   const duration = Number(opts.duration) || 10;
+  const toneId = TONES[opts.tone] ? opts.tone : "warm";
+  const tone = TONES[toneId];
   const cat = detectCategory(prompt);
-  const lib = PHRASES[cat] || PHRASES.general;
+  const pitches = PITCHES[cat] || PITCHES.general;
   const sp = extractSellingPoints(prompt);
   const subject = extractSubject(prompt);
   const budget = budgetChars(duration);
 
-  // 稳定的伪随机：同 prompt+时长 结果一致（避免每次点都变）
+  // 稳定伪随机：同 prompt+时长+语气 结果一致；不同语气盐值不同 → 句式轮换更分散
   let h = 0;
-  const seedStr = `${prompt}|${duration}`;
+  const seedStr = `${prompt}|${duration}|${toneId}`;
   for (let i = 0; i < seedStr.length; i++) h = (h * 31 + seedStr.charCodeAt(i)) >>> 0;
   const pick = (arr, salt = 0) => arr[(h + salt) % arr.length];
 
-  const hook = pick(lib.hooks, 0);
-  const pitch = pick(lib.pitches, 7);
-  const cta = pick(lib.cta, 13);
+  const hook = pick(tone.hooks, 0);
+  const pitch = pick(pitches, 7);
+  const cta = pick(tone.ctas, 13);
 
   // 卖点句：把提取到的价格/数量/优惠/品质拼进去
   const spParts = [];
@@ -229,8 +231,18 @@ export function buildVoiceover(prompt, opts = {}) {
     text: text.trim(),
     category: cat,
     categoryLabel: (CATEGORIES.find((c) => c.id === cat) || { label: "通用" }).label,
+    tone: toneId,
+    toneLabel: tone.label,
     chars: text.trim().length,
     budget,
     sellingPoints: sp,
   };
+}
+
+/**
+ * 三种语气各出一版：warm / urgent / calm。
+ * @returns {Array<{tone,toneLabel,text,chars,...}>}
+ */
+export function buildAllTones(prompt, opts = {}) {
+  return TONE_IDS.map((tone) => buildVoiceover(prompt, { ...opts, tone }));
 }
