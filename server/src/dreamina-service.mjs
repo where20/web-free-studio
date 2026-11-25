@@ -21,6 +21,7 @@ import {
   isTerminal,
   mirrorDreamina,
   normalizeResolution,
+  DREAMINA_MAX_DURATION,
   rankDreaminaAccounts,
   coolingAccounts,
 } from "./providers/dreamina.mjs";
@@ -118,7 +119,9 @@ export async function dreaminaOverview() {
 export async function dreaminaPrecheck(input, account) {
   if (!input.prompt || !String(input.prompt).trim()) throw bad("prompt 不能为空");
   const d = Number(input.duration || 10);
-  if (!Number.isFinite(d) || d < 4 || d > 20) throw bad("时长需在 4-20 秒之间");
+  if (!Number.isFinite(d) || d < 4 || d > DREAMINA_MAX_DURATION) {
+    throw bad(`时长需在 4-${DREAMINA_MAX_DURATION} 秒之间`);
+  }
   if (!account) throw bad("没有可用的即梦账号");
   if (account.status !== "online") throw bad(`账号 ${account.label} 当前 ${account.status}，先接管/授权`);
 

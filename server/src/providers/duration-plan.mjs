@@ -13,12 +13,12 @@
 
 /** 各平台单段时长能力（与 config.mjs / providers 的校验保持一致）
  *  presets 为空的平台是「连续档位」（任意整数秒都收），非空则只能取这些值。
- *  即梦后端允许 4–20，但实测通过的只有 5s / 15s，按已验证值收口到 15 更稳妥。 */
+ *  即梦 seedance 2.5 单条最长 30s（用户确认 + 待实测），30 以内可以直接一条出完整片。 */
 export const PLATFORM_LIMITS = {
   paba: { min: 4, max: 15, presets: [] },
   veda: { min: 5, max: 15, presets: [5, 10, 15] },
   siftq: { min: 6, max: 15, presets: [6, 10, 15] },
-  dreamina: { min: 4, max: 15, presets: [] },
+  dreamina: { min: 4, max: 30, presets: [] },
 };
 
 /**

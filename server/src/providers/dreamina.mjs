@@ -73,11 +73,12 @@ export function normalizePrompt(value) {
   return prompt;
 }
 
-/** 规范化时长（即梦 agent 常见 5/10/15s） */
+/** 规范化时长：即梦 seedance 2.5 单条最长 30s（实测 4-30 可用） */
+export const DREAMINA_MAX_DURATION = 30;
 export function normalizeDuration(v) {
   const n = Number(v || 10);
-  if (!Number.isFinite(n) || n < 4 || n > 20) {
-    throw new DreaminaError("时长需在 4-20 秒之间", { code: "validation" });
+  if (!Number.isFinite(n) || n < 4 || n > DREAMINA_MAX_DURATION) {
+    throw new DreaminaError(`时长需在 4-${DREAMINA_MAX_DURATION} 秒之间`, { code: "validation" });
   }
   return n;
 }

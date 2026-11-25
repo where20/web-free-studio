@@ -899,7 +899,7 @@ function renderForm() {
   } else if (SOURCE === "dreamina") {
     m.innerHTML = `<option value="dreamina-novel">即梦 · AI 剧本编剧</option>`;
     r.innerHTML = PABA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
-    d.min = 4; d.max = 15; d.step = 1;
+    d.min = 4; d.max = 30; d.step = 1;
     $("prompt").placeholder = "用中文自然语言描述画面/动作/镜头/声音，例如：橘猫在阳光窗台伸懒腰，毛发清晰，镜头缓慢推近，无台词。规格（时长/比例/分辨率）服务会自动加前缀。";
   } else {
     r.disabled = false;

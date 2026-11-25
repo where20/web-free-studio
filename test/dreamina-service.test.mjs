@@ -17,11 +17,13 @@ test("prompt 规范化：空/超长拒绝，正常保留", () => {
   assert.equal(normalizePrompt("  你好  "), "你好");
 });
 
-test("时长规范化：4-20 秒，默认 10", () => {
+test("时长规范化：4-30 秒（seedance 2.5 单条最长 30s），默认 10", () => {
   assert.equal(normalizeDuration(undefined), 10);
   assert.equal(normalizeDuration(15), 15);
-  assert.throws(() => normalizeDuration(2), /4-20/);
-  assert.throws(() => normalizeDuration(30), /4-20/);
+  assert.equal(normalizeDuration(28), 28); // 整条一次出，不用分段
+  assert.equal(normalizeDuration(30), 30);
+  assert.throws(() => normalizeDuration(2), /4-30/);
+  assert.throws(() => normalizeDuration(31), /4-30/);
 });
 
 test("清晰度规范化：seedance 2.5 只支持 720P，任何输入一律归一 720P", () => {
