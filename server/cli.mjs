@@ -8,6 +8,7 @@ import { loginAccount, syncOne, solveChallengeFor, generate, startServer, seedCo
 import { startScheduler, syncAll } from "./src/sync.mjs";
 import { startVedaScheduler } from "./src/veda-service.mjs";
 import { startSiftqScheduler } from "./src/siftq-service.mjs";
+import { startDreaminaScheduler } from "./src/dreamina-service.mjs";
 import { stopAll } from "./src/chrome.mjs";
 
 const argv = process.argv.slice(2);
@@ -107,6 +108,7 @@ async function main() {
       const stopScheduler = startScheduler();
       const stopVeda = startVedaScheduler();
       const stopSiftq = startSiftqScheduler();
+      const stopDreamina = startDreaminaScheduler();
       console.log(`▶ 本地工作台  http://localhost:${RUNTIME.port}`);
       console.log(`▶ SSE 事件    http://localhost:${RUNTIME.port}/api/events`);
       const shutdown = async () => {
@@ -114,6 +116,7 @@ async function main() {
         stopScheduler();
         stopVeda();
         stopSiftq();
+        stopDreamina();
         server.close();
         await stopAll();
         process.exit(0);

@@ -236,6 +236,7 @@
         <button data-filter="paba">PabaTV</button>
         <button data-filter="veda">Veda Studio</button>
         <button data-filter="siftq">SiftQ</button>
+        <button data-filter="dreamina">即梦</button>
       </div>
     </h3>
     <div class="kpi" id="kpi"></div>
@@ -373,6 +374,7 @@ const $ = (id) => document.getElementById(id);
 let STATE = { accounts: [], tasks: [], log: [], queue: {}, models: [], limits: {} };
 let VEDA = null; // /api/veda/state 的快照（仅切换来源时拉取）
 let SIFTQ = null; // /api/siftq/state 的快照
+let DREAMINA = null; // /api/dreamina/state 的快照
 let SOURCE = localStorage.getItem("fs.source") || "paba";
 let activeAccount = localStorage.getItem("fs.account") || "";
 let TASK_FILTER = localStorage.getItem("fs.taskFilter") || "all"; // all | paba | veda | siftq
@@ -495,12 +497,13 @@ function setSource(src) {
   renderForm(); renderQuota();
   if (src === "veda") refreshVeda().then(() => { renderQuota(); });
   if (src === "siftq") refreshSiftq().then(() => { renderQuota(); });
+  if (src === "dreamina") refreshDreamina().then(() => { renderQuota(); });
 }
 document.querySelectorAll("#sourceSeg button").forEach((b) => { b.onclick = () => setSource(b.dataset.src); });
 
 // 生成记录：按平台过滤（纯前端，不重拉上游）
 function setTaskFilter(f) {
-  if (!["all", "paba", "veda", "siftq"].includes(f)) return;
+  if (!["all", "paba", "veda", "siftq", "dreamina"].includes(f)) return;
   TASK_FILTER = f;
   localStorage.setItem("fs.taskFilter", f);
   renderTasks();
@@ -583,11 +586,19 @@ function renderForm() {
 function renderQuota() {
   const line = $("quotaLine");
   if (SOURCE === "dreamina") {
-    const dm = STATE.accounts.filter((a) => (a.provider || "paba") === "dreamina" && a.status !== "removed");
-    const online = dm.filter((a) => a.status === "online" && !a.disabled);
-    line.innerHTML = `<span>即梦账号 <b>${online.length}</b>/${dm.length} 在线 · 账号接管与登录态管理</span>`;
-    $("btnGen").disabled = true;
-    $("genHint").textContent = "生成端点待接入（当前账号点数 0、上游生成按钮不可用，无法抓到提交接口）。账号可正常接管/导入/同步，待有额度后补生成链路。";
+    const d = DREAMINA || {};
+    const q = d.quota || {};
+    const online = (d.accounts || []).filter((a) => a.status === "online");
+    const active = q.active ?? 0;
+    const maxActive = d.config?.maxActive ?? 2;
+    const blocked = !online.length || active >= maxActive;
+    line.innerHTML = `<span>即梦 <b>${online.length}</b> 账号在线 · 在途 ${active}/${maxActive} · 今日本机 ${q.done ?? 0} 条成片</span>`;
+    $("btnGen").disabled = blocked;
+    $("genHint").textContent = !online.length
+      ? "没有在线的即梦账号，先到「设置中心 → 账号池」接管/导入登录态。"
+      : active >= maxActive
+        ? "已有视频在生成中，等出片再提交。"
+        : "走即梦 agent 短剧会话通道（seedance 2.5）。上游点数不足时 submit_run 会如实报错；出片自动镜像落盘。";
     return;
   }
   if (SOURCE === "veda") {
@@ -695,23 +706,25 @@ function renderQueue() {
 
 const isVedaTask = (t) => t.provider === "veda" || t.accountId === "veda";
 const isSiftqTask = (t) => t.provider === "siftq" || t.accountId === "siftq";
+const isDreaminaTask = (t) => t.provider === "dreamina" || String(t.accountId || "").startsWith("dm-");
 
 function renderTasks() {
   const box = $("tasks");
   const all = STATE.tasks;
-  const pabaN = all.filter((t) => !isVedaTask(t) && !isSiftqTask(t)).length;
+  const pabaN = all.filter((t) => !isVedaTask(t) && !isSiftqTask(t) && !isDreaminaTask(t)).length;
   const vedaN = all.filter(isVedaTask).length;
   const siftqN = all.filter(isSiftqTask).length;
+  const dreaminaN = all.filter(isDreaminaTask).length;
   // 过滤按钮：高亮当前项 + 各自数量
   document.querySelectorAll("#taskFilter button").forEach((b) => {
     b.classList.toggle("on", b.dataset.filter === TASK_FILTER);
     const f = b.dataset.filter;
-    const n = f === "veda" ? vedaN : f === "paba" ? pabaN : f === "siftq" ? siftqN : all.length;
-    const label = f === "all" ? "全部" : f === "paba" ? "PabaTV" : f === "veda" ? "Veda Studio" : "SiftQ";
+    const n = f === "veda" ? vedaN : f === "paba" ? pabaN : f === "siftq" ? siftqN : f === "dreamina" ? dreaminaN : all.length;
+    const label = f === "all" ? "全部" : f === "paba" ? "PabaTV" : f === "veda" ? "Veda Studio" : f === "siftq" ? "SiftQ" : "即梦";
     b.textContent = label + ` ${n}`;
   });
   const tasks = TASK_FILTER === "all" ? all
-    : all.filter((t) => TASK_FILTER === "veda" ? isVedaTask(t) : TASK_FILTER === "siftq" ? isSiftqTask(t) : !isVedaTask(t) && !isSiftqTask(t));
+    : all.filter((t) => TASK_FILTER === "veda" ? isVedaTask(t) : TASK_FILTER === "siftq" ? isSiftqTask(t) : TASK_FILTER === "dreamina" ? isDreaminaTask(t) : !isVedaTask(t) && !isSiftqTask(t) && !isDreaminaTask(t));
   $("taskCount").textContent = TASK_FILTER === "all" ? tasks.length : `${tasks.length}/${all.length}`;
   const done = tasks.filter((t) => t.status === "done");
   const local = tasks.filter((t) => t.asset?.video);
@@ -725,13 +738,14 @@ function renderTasks() {
   $("empty").hidden = tasks.length > 0;
   if (!tasks.length) $("empty").textContent = TASK_FILTER === "all"
     ? "还没有记录。提交一条生成，或点「同步全部」拉取上游历史。"
-    : `当前没有 ${{ veda: "Veda Studio", siftq: "SiftQ", paba: "PabaTV" }[TASK_FILTER] || "该平台"} 的记录，切到「全部」查看其他平台。`;
+    : `当前没有 ${{ veda: "Veda Studio", siftq: "SiftQ", dreamina: "即梦", paba: "PabaTV" }[TASK_FILTER] || "该平台"} 的记录，切到「全部」查看其他平台。`;
   box.innerHTML = "";
   for (const t of tasks.slice(0, 120)) {
     const el = document.createElement("div");
     el.className = "task";
     const isVeda = isVedaTask(t);
     const isSiftq = isSiftqTask(t);
+    const isDreamina = isDreaminaTask(t);
     const localUrl = t.asset?.video ? "/assets/" + t.asset.video.split("/assets/")[1] : "";
     const thumb = localUrl.replace(/\.mp4$/, ".jpg");
     let media;
@@ -743,7 +757,7 @@ function renderTasks() {
       const stage = STAGE_TEXT[t.stage] || (t.stage ? t.stage : "");
       const step = t.step && t.stepsTotal ? ` ${t.step}/${t.stepsTotal}` : "";
       const pos = t.queuePosition ? `队列第 ${t.queuePosition} 位` : "排队中";
-      const sub = isVeda ? "单卡 RTX 4090 · 2 槽位" : isSiftq ? "MiniMax-H3 · 9:16" : "免费队列较慢";
+      const sub = isVeda ? "单卡 RTX 4090 · 2 槽位" : isSiftq ? "MiniMax-H3 · 9:16" : isDreamina ? "即梦 Seedance 2.5 · agent 会话" : "免费队列较慢";
       media = `<div class="ph">${t.status === "done" ? "成片待同步" : (stage ? stage + step : pos)}<br/><span style="opacity:.6">${sub}</span></div>`;
     }
     const acct = acctById(t.accountId);
@@ -753,8 +767,8 @@ function renderTasks() {
       <div class="info">
         <div class="p" title="${(t.prompt || "").replace(/"/g, "&quot;")}">${t.prompt || "(无提示词)"}</div>
         <div class="tags">
-          <span class="src ${isVeda ? "veda" : isSiftq ? "siftq" : ""}">${isVeda ? "VEDA" : isSiftq ? "SIFTQ" : "PABA"}</span>
-          <span>${acct ? acct.label : (isVeda || isSiftq ? "免账号" : t.accountId)}</span>
+          <span class="src ${isVeda ? "veda" : isSiftq ? "siftq" : isDreamina ? "dreamina" : ""}">${isVeda ? "VEDA" : isSiftq ? "SIFTQ" : isDreamina ? "即梦" : "PABA"}</span>
+          <span>${acct ? acct.label : (isVeda || isSiftq ? "免账号" : isDreamina ? "agent 会话" : t.accountId)}</span>
           <span>${t.duration || "-"}s</span><span>${t.resolution || t.aspectRatio || "-"}</span>
           ${t.billing?.free || isVeda || isSiftq ? "<span>免费</span>" : ""}
           <span>${fmtTime(t.upstreamCreatedAt || t.createdAt)}</span>
@@ -765,7 +779,7 @@ function renderTasks() {
         <button data-op="play">${localUrl ? "打开文件" : "上游查看"}</button>
         ${isVeda
           ? (["done", "failed", "cancelled"].includes(t.status) ? "" : `<button data-op="cancel">取消</button>`)
-          : isSiftq ? "" : `<button data-op="del">删除</button>`}
+          : (isSiftq || isDreamina) ? "" : `<button data-op="del">删除</button>`}
       </div>`;
     el.querySelector('[data-op="copy"]').onclick = () => {
       $("prompt").value = t.prompt || "";
@@ -843,10 +857,17 @@ async function refreshSiftq() {
   return SIFTQ;
 }
 
+async function refreshDreamina() {
+  try { DREAMINA = await api("/api/dreamina/state"); }
+  catch (e) { DREAMINA = { ok: false, error: e.message }; }
+  return DREAMINA;
+}
+
 async function refresh() {
   STATE = await api("/api/state");
   if (SOURCE === "veda") await refreshVeda();
   if (SOURCE === "siftq") await refreshSiftq();
+  if (SOURCE === "dreamina") await refreshDreamina();
   // 同步 source 按钮高亮/配色（首屏 SOURCE 可能来自 localStorage）
   document.querySelectorAll("#sourceSeg button").forEach((b) => {
     b.classList.toggle("on", b.dataset.src === SOURCE);
@@ -857,7 +878,6 @@ async function refresh() {
 
 $("btnGen").onclick = async () => {
   const prompt = $("prompt").value.trim();
-  if (SOURCE === "dreamina") return toast("即梦生成端点待接入，目前仅支持账号接管/导入/同步", true);
   if (!prompt) return toast("先写提示词", true);
   const btn = $("btnGen");
   btn.disabled = true; btn.textContent = "提交中…";
@@ -886,6 +906,18 @@ $("btnGen").onclick = async () => {
         }),
       });
       toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : `已提交 ${out.upstreamId} · 今日剩余 ${out.remaining ?? "?"} 条`);
+    } else if (SOURCE === "dreamina") {
+      const out = await api("/api/dreamina/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          accountId: $("account").value || undefined,
+          prompt,
+          duration: Number($("duration").value),
+          aspect: $("ratio").value,
+          resolution: $("resolution").value || "1080P",
+        }),
+      });
+      toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : `已提交即梦 ${out.upstreamId} · 出片后自动镜像，约 5-8 分钟`);
     } else {
       const out = await api("/api/generate", {
         method: "POST",

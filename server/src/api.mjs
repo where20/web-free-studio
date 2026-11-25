@@ -28,6 +28,7 @@ import { addClient, emit } from "./events.mjs";
 import { Page, sleep } from "./cdp.mjs";
 import { vedaOverview, vedaGenerate, vedaSyncAll, vedaCancelJob } from "./veda-service.mjs";
 import { siftqOverview, siftqGenerate, siftqSyncAll } from "./siftq-service.mjs";
+import { dreaminaOverview, dreaminaGenerate, dreaminaSyncAll } from "./dreamina-service.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -523,6 +524,18 @@ export function createServer() {
 
       if (p === "/api/siftq/sync" && req.method === "POST") {
         return json(res, 200, await siftqSyncAll());
+      }
+
+      /* ---------- 即梦 Dreamina（agent 短剧会话通道，独立模块） ---------- */
+      if (p === "/api/dreamina/state") return json(res, 200, await dreaminaOverview());
+
+      if (p === "/api/dreamina/generate" && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 200, await dreaminaGenerate(body));
+      }
+
+      if (p === "/api/dreamina/sync" && req.method === "POST") {
+        return json(res, 200, await dreaminaSyncAll());
       }
 
       // 兜底：用系统默认浏览器打开登录页（受控 Chrome 起不来时，人工登录 + 导出 Cookie）

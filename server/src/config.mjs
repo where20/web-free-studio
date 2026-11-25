@@ -75,9 +75,23 @@ export const DREAMINA = {
   origin: "https://dreamina.capcut.com",
   novelPage: "https://dreamina.capcut.com/ai-tool/novel",
   accountId: "dreamina",
-  // 生成端点待抓（当前账号点数 0、生成按钮 disabled，无法拿到真实提交请求）
-  dailyCreditsFallback: 0,
+  // 账号层已接通；生成走 agent 短剧会话通道（2026-11-25 抓到完整协议）
+  apiBase: "https://mweb-api-sg.capcut.com",
+  appId: "513641",
+  agentName: "pippit_nest_novel_agent",
+  dailyCreditsFallback: Number(process.env.DREAMINA_DAILY_LIMIT || 20),
   maxActive: Number(process.env.DREAMINA_MAX_ACTIVE || 2),
+  pollActiveMs: Number(process.env.DREAMINA_POLL_MS || 10_000),
+  pollIdleMs: Number(process.env.DREAMINA_POLL_IDLE_MS || 60_000),
+  // 会话级参数：默认取用户已建好的短剧会话，可用环境变量覆盖或未来接「新对话」端点自动创建
+  projectId: process.env.DREAMINA_PROJECT_ID || "1502254033156",
+  threadId: process.env.DREAMINA_THREAD_ID || "ae8c252a-fc76-5baf-ad40-d7990735e384",
+  workspaceId: process.env.DREAMINA_WORKSPACE_ID || "7711929361842110482",
+  paths: {
+    submit: "/api/biz/v3/agent/submit_run",
+    thread: "/api/biz/v3/agent/get_thread",
+    queryArtifact: "/api/biz/v3/asset/query_artifact",
+  },
 };
 
 /**
