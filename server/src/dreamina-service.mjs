@@ -20,6 +20,7 @@ import {
   toTaskRow,
   isTerminal,
   mirrorDreamina,
+  normalizeResolution,
 } from "./providers/dreamina.mjs";
 
 const bad = (msg, extra = {}) => new DreaminaError(msg, { code: "validation", ...extra });
@@ -34,7 +35,7 @@ function fingerprint(input) {
     String(input.prompt || "").trim(),
     Number(input.duration || 10),
     String(input.aspect || "16:9"),
-    String(input.resolution || "1080P"),
+    normalizeResolution(input.resolution),
   ]);
 }
 

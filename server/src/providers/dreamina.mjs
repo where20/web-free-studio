@@ -83,6 +83,14 @@ export function normalizeDuration(v) {
 }
 
 /**
+ * 规范化清晰度：seedance 2.5 目前只支持 720P（不支持 768P / 1080P）。
+ * 任何输入一律归一到 720P，避免把 768P 透传给上游。
+ */
+export function normalizeResolution(_v) {
+  return "720P";
+}
+
+/**
  * 构造 submit_run 请求（对标抓到的真实 body）。
  * session 参数来自 DREAMINA 配置（projectId/threadId/workspaceId）。
  */
@@ -90,7 +98,7 @@ export function buildSubmitRequest(input, session = {}) {
   const prompt = normalizePrompt(input.prompt);
   const duration = normalizeDuration(input.duration);
   const aspect = String(input.aspect || "16:9");
-  const resolution = String(input.resolution || "1080P");
+  const resolution = normalizeResolution(input.resolution);
 
   const projectId = String(session.projectId || DREAMINA.projectId);
   const threadId = String(session.threadId || DREAMINA.threadId);

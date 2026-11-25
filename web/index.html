@@ -784,7 +784,17 @@ function renderForm() {
   };
 
   const m = $("model"), r = $("ratio"), d = $("duration");
-  $("resField").hidden = SOURCE !== "paba"; // Veda / SiftQ 都没有清晰度档，画幅/上游写死
+  // 清晰度档：Paba 用 768P；即梦 seedance 2.5 只支持 720P；Veda/SiftQ 无
+  $("resField").hidden = !["paba", "dreamina"].includes(SOURCE);
+  const resSel = $("resolution");
+  if (SOURCE === "dreamina") {
+    // seedance 2.5 目前只支持 720P（不支持 768P / 1080P）
+    resSel.innerHTML = `<option value="720P">720P</option>`;
+    resSel.value = "720P";
+  } else if (SOURCE === "paba") {
+    resSel.innerHTML = `<option value="768p">768P</option>`;
+    resSel.value = "768p";
+  }
   if (SOURCE === "veda") {
     m.innerHTML = `<option value="minimax-h3-veda">MiniMax-H3 · Veda 稀疏注意力</option>`;
     r.innerHTML = VEDA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
@@ -1318,7 +1328,7 @@ $("btnGen").onclick = async () => {
           prompt,
           duration: Number($("duration").value),
           aspect: $("ratio").value,
-          resolution: $("resolution").value || "1080P",
+          resolution: $("resolution").value || "720P",
         }),
       });
       toast(out.deduped ? "同参数刚提交过，已复用 " + out.upstreamId : `已提交即梦 ${out.upstreamId} · 出片后自动镜像，约 5-8 分钟`);

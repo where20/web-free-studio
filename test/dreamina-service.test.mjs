@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   normalizePrompt,
   normalizeDuration,
+  normalizeResolution,
   buildSubmitRequest,
   findRun,
   toTaskRow,
@@ -23,9 +24,26 @@ test("时长规范化：4-20 秒，默认 10", () => {
   assert.throws(() => normalizeDuration(30), /4-20/);
 });
 
+test("清晰度规范化：seedance 2.5 只支持 720P，任何输入一律归一 720P", () => {
+  assert.equal(normalizeResolution("768p"), "720P"); // Paba 的 768p 不能透传给即梦
+  assert.equal(normalizeResolution("768P"), "720P");
+  assert.equal(normalizeResolution("1080P"), "720P"); // 1080P 也不支持
+  assert.equal(normalizeResolution(""), "720P");
+  assert.equal(normalizeResolution(undefined), "720P");
+  assert.equal(normalizeResolution("720p"), "720P");
+  assert.equal(normalizeResolution("4k"), "720P");
+});
+
+test("buildSubmitRequest：768P 输入被归一化为 720P（不写进 prompt）", () => {
+  const req = buildSubmitRequest({ prompt: "测试", duration: 5, resolution: "768p" });
+  assert.equal(req.resolution, "720P");
+  assert.match(req.body.message.content[0].data, /720P/);
+  assert.doesNotMatch(req.body.message.content[0].data, /768P/);
+});
+
 test("buildSubmitRequest：生成完整 submit_run 请求（对标抓包结构）", () => {
   const req = buildSubmitRequest(
-    { prompt: "唐装少女歌舞", duration: 15, aspect: "16:9", resolution: "1080P" },
+    { prompt: "唐装少女歌舞", duration: 15, aspect: "16:9", resolution: "720P" },
     { projectId: "1502254033156", threadId: "thread-x", workspaceId: "ws-1", consumerUid: "7711" },
   );
   assert.match(req.url, /agent\/submit_run\?babi_param=/);
@@ -42,7 +60,7 @@ test("buildSubmitRequest：生成完整 submit_run 请求（对标抓包结构�
   assert.equal(body.message.thread_id, "thread-x");
   assert.equal(body.message.run_id, req.runId);
   assert.equal(body.message.role, "user");
-  assert.match(body.message.content[0].data, /seedance2\.5,生成15秒视频，16:9，1080P。唐装少女歌舞/);
+  assert.match(body.message.content[0].data, /seedance2\.5,生成15秒视频，16:9，720P。唐装少女歌舞/);
   assert.equal(body.message.content[0].sub_type, "plain/text");
   assert.equal(body.request_id, body.message.message_id);
 
