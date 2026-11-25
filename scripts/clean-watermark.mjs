@@ -29,6 +29,8 @@ import path from "node:path";
 // 预设：基准分辨率 + 水印框（x,y,w,h）。换算时按输入宽高等比缩放。
 const PRESETS = {
   "paba-tv": { baseW: 1344, baseH: 768, box: [1148, 704, 176, 40] },
+  // 即梦 Dreamina：右下角 "✦ DreaminaAI"（1280×720 实测白字边界 x938-1251 / y640-691，含图标+边距）
+  "dreamina": { baseW: 1280, baseH: 720, box: [928, 632, 336, 72] },
 };
 
 function parseArgs(argv) {

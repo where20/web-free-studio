@@ -55,21 +55,27 @@
   .ops button{padding:4px 8px;font-size:11.5px;border-radius:7px}
   .addrow{display:flex;gap:8px;margin-top:4px}
   .addrow input{flex:1}
-  .tasks{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
-  .task{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:#fff;display:flex;flex-direction:column}
-  .task .media{aspect-ratio:16/9;background:#0d1117;position:relative;display:flex;align-items:center;justify-content:center}
-  .task .media img,.task .media video{width:100%;height:100%;object-fit:cover;display:block}
+  .tasks{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:14px;align-items:stretch}
+  .task{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:#fff;display:flex;flex-direction:column;
+    height:302px;cursor:pointer;transition:box-shadow .16s ease,transform .16s ease,border-color .16s ease}
+  .task:hover{box-shadow:0 10px 26px rgba(16,24,40,.14);transform:translateY(-2px);border-color:#c7d3e3}
+  .task .media{flex:0 0 140px;height:140px;background:#0d1117;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .task .media img,.task .media video{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
   .task .media .ph{color:#8b95a1;font-size:12px;text-align:center;padding:8px;line-height:1.5}
+  .task .media .play{position:absolute;inset:0;margin:auto;width:42px;height:42px;border-radius:50%;
+    background:rgba(255,255,255,.86);color:#0d1117;display:flex;align-items:center;justify-content:center;
+    font-size:15px;opacity:0;transition:opacity .16s ease;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.28)}
+  .task:hover .media .play{opacity:1}
   .badge{position:absolute;top:8px;left:8px;font-size:11px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.92);color:#33404d;font-weight:600}
   .badge.done{color:var(--ok)} .badge.pending,.badge.queued,.badge.running{color:var(--warn)} .badge.failed,.badge.error{color:var(--err)}
   .badge.local{left:auto;right:8px;background:#e8f7ee;color:var(--ok)}
   .badge.qpos{left:auto;right:8px;background:#fff5e5;color:#b26a00}
-  .task .info{padding:10px 11px;display:flex;flex-direction:column;gap:6px;flex:1}
-  .task .p{font-size:12.5px;color:#33404d;line-height:1.5;max-height:3em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-  .task .tags{display:flex;gap:5px;flex-wrap:wrap;font-size:11px;color:var(--sub)}
-  .task .tags span{background:var(--chip);padding:2px 7px;border-radius:6px}
-  .task .foot{display:flex;gap:6px;padding:0 11px 11px}
-  .task .foot button{flex:1;padding:5px 8px;font-size:11.5px;border-radius:8px}
+  .task .info{padding:10px 11px;display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;overflow:hidden}
+  .task .p{font-size:12.5px;color:#33404d;line-height:1.5;height:3em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .task .tags{display:flex;gap:5px;flex-wrap:wrap;font-size:11px;color:var(--sub);max-height:2.2em;overflow:hidden}
+  .task .tags span{background:var(--chip);padding:2px 7px;border-radius:6px;white-space:nowrap}
+  .task .foot{display:flex;gap:6px;padding:0 11px 11px;flex:0 0 auto}
+  .task .foot button{flex:1;padding:5px 6px;font-size:11.5px;border-radius:8px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .empty{padding:44px 16px;text-align:center;color:var(--sub)}
   .log{max-height:200px;overflow:auto;font:12px/1.7 var(--mono);padding:10px 16px;color:#4a5765}
   .log div{white-space:pre-wrap;word-break:break-all}
@@ -108,6 +114,33 @@
   .sheet .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
   .sheet textarea{min-height:120px;font-family:var(--mono);font-size:12px}
   .sheet .steps{font-size:12.5px;color:var(--sub);line-height:1.8}
+  /* 任务详情预览：宽屏左右分栏，窄屏上下堆叠，视频自适应容器 */
+  .preview-sheet{background:#fff;border-radius:16px;width:100%;max-width:960px;max-height:90vh;overflow:auto;
+    box-shadow:0 24px 60px rgba(16,24,40,.24);display:flex;flex-direction:column}
+  .preview-sheet h4{margin:0;padding:15px 18px 12px;font-size:15px;display:flex;align-items:center;gap:8px;position:sticky;top:0;background:#fff;z-index:2;border-bottom:1px solid var(--line)}
+  .preview-sheet h4 .src-tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--chip);color:var(--sub)}
+  .preview-sheet h4 button{margin-left:auto;border:0;background:transparent;font-size:20px;line-height:1;padding:0 4px;cursor:pointer;color:var(--sub)}
+  .preview-body{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:0}
+  .preview-media{background:#0d1117;display:flex;align-items:center;justify-content:center;padding:14px;min-height:260px}
+  .preview-media video,.preview-media img{max-width:100%;max-height:62vh;width:auto;height:auto;border-radius:10px;display:block;object-fit:contain;background:#000}
+  .preview-media .ph{color:#8b95a1;font-size:13px;text-align:center;line-height:1.7;padding:16px}
+  .preview-side{padding:16px 18px 18px;display:flex;flex-direction:column;gap:12px;min-width:0;border-left:1px solid var(--line)}
+  .preview-side .prompt{font-size:13px;line-height:1.65;color:#2b3644;white-space:pre-wrap;word-break:break-word;max-height:34vh;overflow:auto;background:#f7f9fc;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .preview-side .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:12px;color:var(--sub)}
+  .preview-side .kv b{color:var(--ink);font-weight:600;word-break:break-all}
+  .preview-side .kv .k{color:var(--sub);white-space:nowrap}
+  .preview-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto}
+  .preview-actions button{padding:7px 12px;font-size:12.5px;border-radius:9px}
+  @media (max-width:720px){
+    .tasks{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+    .task{height:250px}
+    .task .media{flex-basis:104px;height:104px}
+    .preview-body{grid-template-columns:1fr}
+    .preview-media{min-height:180px;padding:10px}
+    .preview-media video,.preview-media img{max-height:44vh}
+    .preview-side{border-left:0;border-top:1px solid var(--line)}
+    .preview-sheet{max-height:94vh}
+  }
   .sheet .steps code{background:var(--chip);padding:1px 5px;border-radius:5px}
   .queuebar{display:flex;gap:10px;flex-wrap:wrap;padding:9px 16px;border-bottom:1px solid var(--line);font-size:12px;color:var(--sub);align-items:center}
   .queuebar b{color:var(--ink)}
@@ -360,6 +393,20 @@
       <div class="foot" style="margin-top:16px">
         <button id="editCancel" class="ghost">取消</button>
         <button id="editSave" class="primary">保存修改</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="previewModal" hidden>
+  <div class="preview-sheet">
+    <h4><span id="pvSrc" class="src-tag">PABA</span><span id="pvTitle" style="font-size:13px;font-weight:600">任务详情</span><button id="pvClose" aria-label="关闭">×</button></h4>
+    <div class="preview-body">
+      <div class="preview-media" id="pvMedia"></div>
+      <div class="preview-side">
+        <div class="prompt" id="pvPrompt"></div>
+        <div class="kv" id="pvKv"></div>
+        <div class="preview-actions" id="pvActions"></div>
       </div>
     </div>
   </div>
@@ -770,13 +817,15 @@ function renderTasks() {
     const isVeda = isVedaTask(t);
     const isSiftq = isSiftqTask(t);
     const isDreamina = isDreaminaTask(t);
-    const localUrl = t.asset?.video ? "/assets/" + t.asset.video.split("/assets/")[1] : "";
+    const rawUrl = t.asset?.video ? "/assets/" + t.asset.video.split("/assets/")[1] : "";
+    const cleanUrl = t.asset?.clean?.rel ? "/assets/" + t.asset.clean.rel : "";
+    const localUrl = cleanUrl || rawUrl; // 有去水印版优先用
     const thumb = localUrl.replace(/\.mp4$/, ".jpg");
     let media;
     if (localUrl) {
-      media = `<video src="${localUrl}" poster="${thumb}" preload="metadata" muted playsinline controls></video><span class="badge local">本地</span>`;
+      media = `<video src="${localUrl}#t=0.1" poster="${thumb}" preload="metadata" muted playsinline></video><span class="play">▶</span><span class="badge local">${cleanUrl ? "已去水印" : "本地"}</span>`;
     } else if (t.video?.thumb_url) {
-      media = `<img src="${t.video.thumb_url}" alt="" /><span class="badge qpos">待镜像</span>`;
+      media = `<img src="${t.video.thumb_url}" alt="" /><span class="play">▶</span><span class="badge qpos">待镜像</span>`;
     } else {
       const stage = STAGE_TEXT[t.stage] || (t.stage ? t.stage : "");
       const step = t.step && t.stepsTotal ? ` ${t.step}/${t.stepsTotal}` : "";
@@ -801,11 +850,8 @@ function renderTasks() {
       <div class="foot">
         <button data-op="copy">复用提示词</button>
         <button data-op="play">${localUrl ? "打开文件" : "上游查看"}</button>
-        ${isVeda
-          ? (["done", "failed", "cancelled"].includes(t.status) ? "" : `<button data-op="cancel">取消</button>`)
-          : ""}
-        ${(!isVeda && !isSiftq && !isDreamina) ? `<button data-op="del">上游删除</button>` : ""}
-        <button data-op="localdel" style="color:#c53030">删本地</button>
+        ${rawUrl ? `<button data-op="wm" ${t.asset?.clean ? "disabled" : ""}>${t.asset?.clean ? "已去水印" : "去水印"}</button>` : ""}
+        <button data-op="detail">详情</button>
       </div>`;
     el.querySelector('[data-op="copy"]').onclick = () => {
       $("prompt").value = t.prompt || "";
@@ -823,28 +869,21 @@ function renderTasks() {
       else if (isSiftq) window.open("https://siftq.com/minimax-h3/try", "_blank");
       else window.open("https://www.paba.tv/v1/videos/" + t.upstreamId + "/content", "_blank");
     };
-    const cancelBtn = el.querySelector('[data-op="cancel"]');
-    if (cancelBtn) cancelBtn.onclick = async () => {
-      if (!confirm("取消这条 Veda 任务？已扣的 credit 不会退还。")) return;
-      try { await api(`/api/veda/jobs/${encodeURIComponent(t.upstreamId)}/cancel`, { method: "POST" }); toast("已取消"); await refresh(); }
-      catch (e) { toast(e.message, true); }
-    };
-    const delBtn = el.querySelector('[data-op="del"]');
-    if (delBtn) delBtn.onclick = async () => {
-      if (!confirm("从上游删除这条记录？本地已下载的成片会保留。")) return;
-      try { await api(`/api/tasks/${t.accountId}/${t.upstreamId}`, { method: "DELETE" }); toast("已删除"); await refresh(); }
-      catch (e) { toast(e.message, true); }
-    };
-    const localDelBtn = el.querySelector('[data-op="localdel"]');
-    if (localDelBtn) localDelBtn.onclick = async () => {
-      const hasFile = Boolean(t.asset?.video);
-      if (!confirm(`从本地删除这条${t.status === "failed" ? "失败" : ""}记录${hasFile ? "和成片文件" : ""}？\n\n· 只删本地，不动上游\n· 删除后不可恢复`)) return;
-      localDelBtn.disabled = true;
+    const wmBtn = el.querySelector('[data-op="wm"]');
+    if (wmBtn) wmBtn.onclick = async (e) => {
+      e.stopPropagation();
+      wmBtn.disabled = true; wmBtn.textContent = "处理中…";
       try {
-        const out = await api(`/api/tasks/local/${encodeURIComponent(t.upstreamId)}`, { method: "DELETE" });
-        toast(out.freed ? `已删除，释放 ${(out.freed / 1048576).toFixed(1)}MB` : "已删除");
+        const out = await api(`/api/tasks/${encodeURIComponent(t.upstreamId)}/watermark-off`, { method: "POST" });
+        toast(out.bytes ? `去水印完成，${(out.bytes / 1048576).toFixed(1)}MB` : "去水印完成");
         await refresh();
-      } catch (e) { toast(e.message, true); localDelBtn.disabled = false; }
+      } catch (err) { toast(err.message, true); wmBtn.disabled = false; wmBtn.textContent = "去水印"; }
+    };
+    el.querySelector('[data-op="detail"]').onclick = () => openPreview(t);
+    // 整卡点击 = 打开详情预览；按钮区不触发
+    el.onclick = (ev) => {
+      if (ev.target.closest(".foot")) return;
+      openPreview(t);
     };
     box.appendChild(el);
   }
@@ -854,6 +893,113 @@ function renderLog() {
   $("log").innerHTML = STATE.log.slice(0, 80).map((l) =>
     `<div><span class="t">${new Date(l.at).toLocaleTimeString("zh-CN", { hour12: false })}</span>${l.kind ? "[" + l.kind + "] " : ""}${l.message || ""}</div>`
   ).join("");
+}
+
+/* ---------- 任务详情预览 ---------- */
+const _escapeHtml = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function openPreview(t) {
+  if (!t) return;
+  const isVeda = isVedaTask(t);
+  const isSiftq = isSiftqTask(t);
+  const isDreamina = isDreaminaTask(t);
+  const srcName = isVeda ? "VEDA" : isSiftq ? "SIFTQ" : isDreamina ? "即梦" : "PABA";
+  const rawUrl = t.asset?.video ? "/assets/" + t.asset.video.split("/assets/")[1] : "";
+  const cleanUrl = t.asset?.clean?.rel ? "/assets/" + t.asset.clean.rel : "";
+  const localUrl = cleanUrl || rawUrl; // 详情也优先去水印版
+  const thumb = (rawUrl || localUrl).replace(/\.mp4$/, ".jpg");
+  const acct = acctById(t.accountId);
+  const badge = t.status === "pending" ? "排队" : t.status;
+
+  $("pvSrc").textContent = srcName;
+  $("pvTitle").textContent = t.status === "done" ? "成片详情" : `${badge} · 任务详情`;
+
+  // 媒体区：优先本地成片（可播放），其次上游缩略图，最后占位
+  const media = $("pvMedia");
+  if (localUrl) {
+    media.innerHTML = `<video src="${localUrl}" poster="${thumb}" controls autoplay muted playsinline></video>`;
+  } else if (t.video?.thumb_url) {
+    media.innerHTML = `<img src="${t.video.thumb_url}" alt="预览" />`;
+  } else {
+    const stage = STAGE_TEXT[t.stage] || (t.stage || "");
+    const pos = t.queuePosition ? `队列第 ${t.queuePosition} 位` : "排队中";
+    media.innerHTML = `<div class="ph">${t.status === "done" ? "成片待同步" : (stage || pos)}<br/>暂无本地预览，可点下方「上游查看」</div>`;
+  }
+
+  $("pvPrompt").textContent = t.prompt || "(无提示词)";
+
+  const rows = [
+    ["状态", badge],
+    ["来源", srcName],
+    ["账号", acct ? acct.label : (isVeda || isSiftq ? "免账号" : isDreamina ? "agent 会话" : t.accountId || "-")],
+    ["时长", t.duration ? `${t.duration}s` : "-"],
+    ["规格", t.resolution || t.aspectRatio || "-"],
+    ["免费", (t.billing?.free || isVeda || isSiftq) ? "是" : "否"],
+    ["创建", fmtTime(t.upstreamCreatedAt || t.createdAt)],
+    ["任务ID", t.upstreamId || "-"],
+  ];
+  if (t.asset?.bytes) rows.push(["本地大小", fmtBytes(t.asset.bytes)]);
+  $("pvKv").innerHTML = rows.map(([k, v]) => `<span class="k">${k}</span><b>${_escapeHtml(v)}</b>`).join("");
+
+  // 操作区
+  const acts = $("pvActions");
+  acts.innerHTML = "";
+  const mkBtn = (label, fn, danger) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (danger) b.style.color = "#c53030";
+    b.onclick = async (e) => { e.stopPropagation(); try { await fn(b); } catch (err) { toast(err.message, true); } };
+    acts.appendChild(b);
+    return b;
+  };
+  mkBtn("复用提示词", () => {
+    $("prompt").value = t.prompt || "";
+    $("duration").value = t.duration || 5;
+    if (isVeda) { setSource("veda"); }
+    else if (isSiftq) { setSource("siftq"); }
+    else if (acct && !acct.disabled) { activeAccount = t.accountId; $("account").value = t.accountId; renderQuota(); renderAccounts(); }
+    closePreview();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  mkBtn(localUrl ? "打开文件" : "上游查看", () => {
+    if (localUrl) window.open(localUrl, "_blank");
+    else if (isVeda) window.open("https://veda.hanxiao.run/#/job/" + encodeURIComponent(t.upstreamId), "_blank");
+    else if (isSiftq) window.open("https://siftq.com/minimax-h3/try", "_blank");
+    else if (isDreamina) toast("即梦产物请在 agent 会话里查看");
+    else window.open("https://www.paba.tv/v1/videos/" + t.upstreamId + "/content", "_blank");
+  });
+  if (isVeda && !["done", "failed", "cancelled"].includes(t.status)) {
+    mkBtn("取消任务", async () => {
+      if (!confirm("取消这条 Veda 任务？已扣的 credit 不会退还。")) return;
+      await api(`/api/veda/jobs/${encodeURIComponent(t.upstreamId)}/cancel`, { method: "POST" });
+      toast("已取消"); closePreview(); await refresh();
+    }, true);
+  }
+  if (!isVeda && !isSiftq && !isDreamina) {
+    mkBtn("上游删除", async () => {
+      if (!confirm("从上游删除这条记录？本地已下载的成片会保留。")) return;
+      await api(`/api/tasks/${t.accountId}/${t.upstreamId}`, { method: "DELETE" });
+      toast("已删除"); closePreview(); await refresh();
+    }, true);
+  }
+  mkBtn("删本地", async () => {
+    const hasFile = Boolean(t.asset?.video);
+    if (!confirm(`从本地删除这条${t.status === "failed" ? "失败" : ""}记录${hasFile ? "和成片文件" : ""}？\n\n· 只删本地，不动上游\n· 删除后不可恢复`)) return;
+    const out = await api(`/api/tasks/local/${encodeURIComponent(t.upstreamId)}`, { method: "DELETE" });
+    toast(out.freed ? `已删除，释放 ${(out.freed / 1048576).toFixed(1)}MB` : "已删除");
+    closePreview(); await refresh();
+  }, true);
+
+  $("previewModal").hidden = false;
+}
+
+function closePreview() {
+  const m = $("previewModal");
+  if (!m || m.hidden) return;
+  const v = m.querySelector("video");
+  if (v) { try { v.pause(); } catch {} }
+  $("pvMedia").innerHTML = "";
+  m.hidden = true;
 }
 
 function renderSyncInfo() {
@@ -1333,6 +1479,13 @@ async function openEdit(id) {
 $("editClose").onclick = () => { editModal.hidden = true; };
 $("editCancel").onclick = () => { editModal.hidden = true; };
 editModal.addEventListener("click", (e) => { if (e.target === editModal) editModal.hidden = true; });
+
+// 任务详情预览：关闭按钮 / 点遮罩 / ESC
+$("pvClose").onclick = () => closePreview();
+$("previewModal").addEventListener("click", (e) => { if (e.target === $("previewModal")) closePreview(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("previewModal").hidden) closePreview();
+});
 
 $("editSave").onclick = async () => {
   const b = $("editSave");

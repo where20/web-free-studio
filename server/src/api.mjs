@@ -733,6 +733,32 @@ export function createServer() {
         });
       }
 
+      // 去水印：对本地产物跑 ffmpeg delogo（preset 按平台），输出 -clean.mp4，记到 asset.clean
+      const wmMatch = p.match(/^\/api\/tasks\/([^/]+)\/watermark-off$/);
+      if (wmMatch && req.method === "POST") {
+        const upstreamId = decodeURIComponent(wmMatch[1]);
+        const row = await getTask({ accountId: null, upstreamId });
+        if (!row) return json(res, 404, { error: "任务不存在" });
+        const src = row.asset?.video;
+        if (!src) return json(res, 400, { error: "这条任务还没有本地成片，先等出片镜像" });
+        const provider = row.provider || "paba";
+        const preset = provider === "dreamina" ? "dreamina" : "paba-tv";
+        const scriptPath = path.join(WEB_DIR, "..", "scripts", "clean-watermark.mjs");
+        const { spawnSync } = await import("node:child_process");
+        const r = spawnSync(process.execPath, [scriptPath, src, "--preset", preset, "--force"], { encoding: "utf8" });
+        if (r.status !== 0) {
+          return json(res, 500, { error: `去水印失败：${(r.stderr || r.stdout || "").slice(-300)}` });
+        }
+        const cleanPath = src.replace(/\.mp4$/i, "-clean.mp4");
+        const st = await fs.stat(cleanPath).catch(() => null);
+        if (!st) return json(res, 500, { error: "去水印未产出文件" });
+        const rel = cleanPath.split("/assets/")[1];
+        const updated = await upsertTask({ ...row, asset: { ...(row.asset || {}), clean: { video: cleanPath, rel, bytes: st.size, at: Date.now() } } });
+        await logEvent("watermark_off", `${upstreamId} 去水印完成（${preset}）`, { accountId: row.accountId });
+        emit("task", { upstreamId, provider, cleaned: true });
+        return json(res, 200, { ok: true, clean: { rel, bytes: st.size }, preset });
+      }
+
       // 纯本地删除：删任务记录 + 本地视频/封面/元数据；不动上游（适用于失败/已完成/任意平台）
       const localDelMatch = p.match(/^\/api\/tasks\/local\/([^/]+)$/);
       if (localDelMatch && req.method === "DELETE") {
@@ -744,6 +770,7 @@ export function createServer() {
         if (row.asset?.video) files.push(row.asset.video);
         if (row.asset?.thumb) files.push(row.asset.thumb);
         if (row.asset?.meta) files.push(row.asset.meta);
+        if (row.asset?.clean?.video) files.push(row.asset.clean.video);
         let freed = 0;
         for (const f of files) {
           try {
