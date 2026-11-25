@@ -84,7 +84,10 @@ export function precheckPrompt(provider, input = {}) {
     }
 
     // ② 口播意图但缺台词：prompt 提到口播/面对镜头/分享等，却没给具体台词 → agent 几乎必反问
-    const wantsVoice = /口播|面对镜头|对镜头|分享|介绍|推荐|安利|旁白|讲解|台词|讲述|口述|卖点/.test(prompt);
+    //    先剔掉否定表述（"无口播/不要台词/无人说话"），否则「无口播」会被当成「要口播」
+    const negated = /无口播|没有口播|不要口播|无台词|没有台词|不要台词|无人说话|不说话|不出声|无对白|没有对白|静音/.test(prompt);
+    const wantsVoice =
+      !negated && /口播|面对镜头|对镜头|分享|介绍|推荐|安利|旁白|讲解|台词|讲述|口述|卖点/.test(prompt);
     const hasScript =
       // 「口播：xxx」，允许中间夹括号说明，如「口播台词（逐字口述、嘴型同步）：」
       /(口播|台词|文案|旁白|说)\s*(?:[（(][^）)]{0,24}[）)])?\s*[：:]/.test(prompt) ||

@@ -131,3 +131,11 @@ test("即梦：台词本身超长仍要 warn", () => {
   const r = precheckPrompt("dreamina", { prompt: script, duration: 10 });
   assert.ok(r.issues.some((i) => /台词约/.test(i.msg) || /偏长/.test(i.msg)));
 });
+
+test("即梦：明确写「无口播/无人说话」→ 不报缺台词", () => {
+  const r = precheckPrompt("dreamina", {
+    prompt: "桌上摆满汉堡炸鸡薯条，镜头推到汉堡横截面特写，热气升腾。画面不出现人物与文字，无口播，无对白。",
+    duration: 14,
+  });
+  assert.ok(!r.issues.some((i) => /没写具体台词/.test(i.msg)), "否定表述不应触发缺台词提醒");
+});
