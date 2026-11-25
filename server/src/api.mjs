@@ -33,6 +33,7 @@ import { siftqOverview, siftqGenerate, siftqSyncAll } from "./siftq-service.mjs"
 import { dreaminaOverview, dreaminaGenerate, dreaminaSyncAll } from "./dreamina-service.mjs";
 import { buildVoiceover, buildAllTones } from "./providers/voiceover.mjs";
 import { precheckPrompt } from "./providers/precheck.mjs";
+import { planDuration } from "./providers/duration-plan.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -606,6 +607,12 @@ export function createServer() {
       if (p === "/api/precheck" && req.method === "POST") {
         const body = await readBody(req);
         return json(res, 200, precheckPrompt(body.provider, body));
+      }
+
+      // 自适应时长推荐：按提示词判内容类型 → 推荐时长 + 拆段方案 + 依据
+      if (p === "/api/duration-plan" && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 200, planDuration(body.provider || "paba", body));
       }
 
       /* ---------- 即梦 Dreamina（agent 短剧会话通道，独立模块） ---------- */      if (p === "/api/dreamina/state") return json(res, 200, await dreaminaOverview());

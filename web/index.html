@@ -214,6 +214,16 @@
   .precheck-box .pi b{font-weight:700}
   .precheck-box .pv{margin-top:6px;padding-top:6px;border-top:1px dashed rgba(0,0,0,.12);color:var(--ink);font-size:11.5px}
   .precheck-box .pv i{font-style:normal;color:var(--sub)}
+  .durwrap{display:flex;gap:6px}
+  .durwrap input{flex:1;min-width:0}
+  .durwrap button{padding:0 10px;flex:0 0 auto;font-size:13px;line-height:1}
+  .dur-hint{margin-top:8px;border-radius:10px;padding:9px 12px;font-size:12px;line-height:1.6;background:#ebf4ff;border:1px solid #bfdbfe;color:#1e40af}
+  .dur-hint.far{background:#fffbea;border-color:#f6e05e;color:#975a16}
+  .dur-hint .dh-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700}
+  .dur-hint .dh-top button{margin-left:auto;padding:3px 10px;font-size:11.5px;border-radius:999px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer}
+  .dur-hint ul{margin:6px 0 0;padding-left:16px}
+  .dur-hint li{margin:1px 0}
+  .dur-hint .dh-note{margin-top:6px;padding-top:6px;border-top:1px dashed rgba(0,0,0,.12);opacity:.9}
 </style>
 </head>
 <body>
@@ -301,7 +311,12 @@
 
       <div class="row3">
         <div><label class="f">模型</label><select id="model"></select></div>
-        <div><label class="f">时长(秒)</label><input id="duration" type="number" min="4" max="15" value="5" /></div>
+        <div><label class="f">时长(秒)</label>
+          <div class="durwrap">
+            <input id="duration" type="number" min="4" max="15" value="5" />
+            <button id="btnDurPlan" class="ghost" title="按提示词内容推荐时长">✨</button>
+          </div>
+        </div>
         <div id="resField"><label class="f">清晰度</label><select id="resolution"><option value="768p">768P</option></select></div>
       </div>
       <div class="row">
@@ -316,6 +331,7 @@
         <button id="btnSync" class="ghost">刷新记录</button>
       </div>
       <div class="hint" id="genHint">只开放免费模型；每次提交按「消耗 1 次」计账，失败自动退还。</div>
+      <div class="dur-hint" id="durHint" hidden></div>
       <div class="precheck-box" id="precheckBox" hidden></div>
     </div>
   </section>
@@ -794,6 +810,7 @@ function setSource(src) {
   if (voBtn) voBtn.hidden = src === "siftq";
   if (src === "siftq" && $("voPanel")) $("voPanel").hidden = true;
   if ($("precheckBox")) $("precheckBox").hidden = true;
+  if ($("durHint")) $("durHint").hidden = true;
 }
 document.querySelectorAll("#sourceSeg button").forEach((b) => { b.onclick = () => setSource(b.dataset.src); });
 
@@ -1398,6 +1415,55 @@ async function runPrecheck() {
   }
   return true;
 }
+
+// 自适应时长：按提示词判内容类型 → 推荐总时长 + 单段可提交值 + 拆段方案 + 依据
+// silent=true 时不弹 toast、不覆盖用户当前填的值（供预检时顺带提示用）
+async function recommendDuration({ apply = true, silent = false } = {}) {
+  const box = $("durHint");
+  const prompt = ($("prompt").value || "").trim();
+  if (!prompt) { if (!silent) toast("先写提示词再推荐时长", true); box.hidden = true; return null; }
+
+  let out;
+  try {
+    out = await api("/api/duration-plan", {
+      method: "POST",
+      body: JSON.stringify({ provider: SOURCE, prompt, duration: Number($("duration").value) || null }),
+    });
+  } catch { box.hidden = true; return null; }
+
+  const cur = Number($("duration").value) || 0;
+  const far = !out.fits || Math.abs(cur - out.recommended) >= 3;
+  box.className = "dur-hint" + (far ? " far" : "");
+  box.hidden = false;
+
+  const segLine = out.fits
+    ? `一段 ${out.recommended}s 即可`
+    : `单段装不下 → 拆 ${out.segments.length} 段 × ${out.segments[0].duration}s`;
+  const applyTxt = Math.abs(cur - out.recommended) >= 1 || !out.fits ? "采纳建议" : "";
+  box.innerHTML = `
+    <div class="dh-top">
+      <span>✨ 建议 ${out.target}s · ${out.label}</span>
+      <span style="font-weight:400;opacity:.85">${segLine}</span>
+      ${applyTxt ? `<button id="durApply">${applyTxt}</button>` : ""}
+    </div>
+    <ul>${out.reasons.map((r) => `<li>${r}</li>`).join("")}</ul>
+    ${(out.notes || []).length ? `<div class="dh-note">${out.notes.map((n) => `· ${n}`).join("<br>")}</div>` : ""}`;
+
+  const btn = $("durApply");
+  if (btn) btn.onclick = () => {
+    $("duration").value = out.recommended;
+    toast(`时长已设为 ${out.recommended}s${out.fits ? "" : `（共需 ${out.segments.length} 段，记得再补 ${out.segments.length - 1} 段拼接）`}`);
+    recommendDuration({ apply: false, silent: true });
+  };
+
+  if (apply) $("duration").value = out.recommended;
+  return out;
+}
+$("btnDurPlan").onclick = () => recommendDuration({ apply: true });
+// 提示词写完离开输入框时静默算一次，只提示不覆盖用户填的时长
+$("prompt").addEventListener("blur", () => {
+  if (($("prompt").value || "").trim().length >= 12) recommendDuration({ apply: false, silent: true });
+});
 
 $("btnGen").onclick = async () => {
   const prompt = $("prompt").value.trim();
