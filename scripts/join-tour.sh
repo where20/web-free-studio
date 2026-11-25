@@ -34,7 +34,9 @@ log "段1 $P1"
 log "段2 $P2"
 
 OUT="data/assets/$(date +%Y-%m-%d)/dreamina-tour-2x14-joined.mp4"
-printf "file '%s'\nfile '%s'\n" "$PWD/$F1" "$PWD/$F2" > /tmp/concat-tour.txt
+abspath() { case "$1" in /*) echo "$1";; *) echo "$PWD/$1";; esac; }
+A1=$(abspath "$F1"); A2=$(abspath "$F2")
+printf "file '%s'\nfile '%s'\n" "$A1" "$A2" > /tmp/concat-tour.txt
 if [ "$P1" = "$P2" ]; then
   ffmpeg -y -loglevel error -f concat -safe 0 -i /tmp/concat-tour.txt -c copy -movflags +faststart "$OUT" \
     || { log "concat copy 失败，转重编码"; ffmpeg -y -loglevel error -f concat -safe 0 -i /tmp/concat-tour.txt -c:v libx264 -crf 18 -preset veryfast -c:a aac -b:a 160k -movflags +faststart "$OUT" || exit 5; }
@@ -43,6 +45,10 @@ else
   ffmpeg -y -loglevel error -f concat -safe 0 -i /tmp/concat-tour.txt -c:v libx264 -crf 18 -preset veryfast -c:a aac -b:a 160k -movflags +faststart "$OUT" || exit 5
 fi
 
-ffprobe -v error -show_entries format=duration,size -of default=nw=1 "$OUT" >&2
+D=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT")
+S=$(ffprobe -v error -show_entries format=size -of default=nw=1:nk=1 "$OUT")
+log "输出时长 ${D}s / ${S} bytes"
+# 两段各约 14s，总时长不足 25s 说明只拼进了一段
+awk -v d="$D" 'BEGIN{exit !(d+0 < 25)}' && { log "ERROR 时长异常（<25s），拼接没成功"; exit 7; }
 log "JOINED $OUT"
 echo "$OUT"
