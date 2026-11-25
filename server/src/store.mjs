@@ -135,6 +135,16 @@ export async function getTask({ accountId, upstreamId }) {
   );
 }
 
+/** 从本地任务库彻底删除一条记录（纯本地，不动上游；返回被删的行） */
+export async function removeTask(upstreamId) {
+  return update((db) => {
+    const i = db.tasks.findIndex((t) => t.upstreamId === upstreamId);
+    if (i < 0) return null;
+    const [row] = db.tasks.splice(i, 1);
+    return row;
+  });
+}
+
 export async function pruneTasks() {
   return update((db) => {
     // 按 upstreamId 去重：保留「有本地资产」或「更新时间较新」的那条

@@ -11,9 +11,11 @@ import {
   getAccount,
   upsertAccount,
   upsertTask,
+  getTask,
   listTasks,
   logEvent,
   pruneTasks,
+  removeTask,
   getUsage,
   consumedOf,
   countActive,
@@ -198,9 +200,72 @@ async function ensureBrowser(accountId, { headless }) {
   }
 }
 
+/**
+ * ego 后端版授权：在 ego 浏览器该账号专属 taskSpace 里打开登录页并聚焦，
+ * 由用户人工登录；Node 侧轮询身份接口，成功后回读 cookie 落盘 + 同步。
+ * 不启动本机 Chrome —— 本机 Chrome 在部分环境 CDP 一起来就断（见 loginAccount 的 chrome 分支）。
+ */
+async function loginAccountEgo(account, { timeoutMs = 300_000 } = {}) {
+  const cfg = providerConfig(account);
+  const lane = laneFor(account); // EgoLane（backend=ego）
+  if (typeof lane.execRaw !== "function" || typeof lane.readBrowserCookies !== "function") {
+    throw Object.assign(new Error("当前车道不支持 ego 授权"), { code: "ego_unavailable" });
+  }
+  // 单次 evaluate 自带 15s 超时（ego 的 evaluate 有硬上限），避免把车道挂死
+  const meExpr = `(async()=>{const c=new AbortController();const t=setTimeout(()=>c.abort(),15000);try{const r=await fetch(${JSON.stringify(cfg.mePath)},{credentials:'include',cache:'no-store',signal:c.signal});const x=await r.text();try{return JSON.parse(x)}catch{return null}}catch{return null}finally{clearTimeout(t)}})()`;
+  const script = `
+const SPACE = ${JSON.stringify(lane.spaceName)};
+const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
+const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
+let page = (await task.pages())[0] || (await task.newPage());
+const cur = String(await page.url() || "");
+if (!cur.startsWith(${JSON.stringify(cfg.origin)})) {
+  await page.goto(${JSON.stringify(cfg.loginPage)}, { timeout: 60000 });
+}
+try { await page.focus(); } catch {}
+const parseMe = ${cfg.parseMe.toString()};
+const deadline = Date.now() + ${timeoutMs};
+let me = null;
+while (Date.now() < deadline) {
+  const raw = await page.evaluate(${JSON.stringify(meExpr)});
+  const v = raw && typeof raw === "object" ? raw : null;
+  const parsed = v ? parseMe(v) : null;
+  if (parsed && parsed.ok) { me = Object.assign({}, v, parsed); break; }
+  await page.waitForTimeout(2000);
+}
+console.log("__FS__" + JSON.stringify({ ok: !!me, me }));
+`;
+  let out;
+  try {
+    out = await lane.execRaw(script, timeoutMs + 60_000);
+  } catch (e) {
+    throw Object.assign(new Error(`ego 授权窗口起不来：${e.message}`), { code: "ego_unavailable" });
+  }
+  if (!out?.ok) throw new Error("登录等待超时（ego 窗口内未完成登录）");
+  // 回读浏览器 cookie 落盘。execRaw 不注入旧 cookie，避免刚登录的新态被冲掉
+  const rows = await lane.readBrowserCookies();
+  if (rows.length) await writeCookies(account.id, rows, account.provider);
+  await upsertAccount({
+    id: account.id,
+    status: "online",
+    upstreamUserId: out.me.user_id,
+    lastSeenAt: Date.now(),
+    lastError: null,
+    needsChallenge: false,
+    cookieUpdatedAt: Date.now(),
+  });
+  await logEvent("login_ok", `[${account.label}] ego 授权成功：${out.me.user_id}`, { accountId: account.id });
+  emit("login", { accountId: account.id, phase: "ok", userId: out.me.user_id });
+  await syncAccount(await getAccount(account.id));
+  return { ok: true, userId: out.me.user_id };
+}
+
 export async function loginAccount(accountId, { timeoutMs = 300_000 } = {}) {
   const account = await getAccount(accountId);
   if (!account) throw new Error(`账号不存在：${accountId}`);
+  if ((account.backend || "chrome") === "ego") {
+    return loginAccountEgo(account, { timeoutMs });
+  }
   const cfg = providerConfig(account);
   const browser = await ensureBrowser(accountId, { headless: false });
   const page = await Page.open(browser.port, "about:blank");
@@ -666,6 +731,31 @@ export function createServer() {
             provider: url.searchParams.get("provider") || undefined,
           }),
         });
+      }
+
+      // 纯本地删除：删任务记录 + 本地视频/封面/元数据；不动上游（适用于失败/已完成/任意平台）
+      const localDelMatch = p.match(/^\/api\/tasks\/local\/([^/]+)$/);
+      if (localDelMatch && req.method === "DELETE") {
+        const upstreamId = decodeURIComponent(localDelMatch[1]);
+        const row = await getTask({ accountId: null, upstreamId });
+        if (!row) return json(res, 404, { error: "任务不存在" });
+        const removed = await removeTask(upstreamId);
+        const files = [];
+        if (row.asset?.video) files.push(row.asset.video);
+        if (row.asset?.thumb) files.push(row.asset.thumb);
+        if (row.asset?.meta) files.push(row.asset.meta);
+        let freed = 0;
+        for (const f of files) {
+          try {
+            const st = await fs.stat(f).catch(() => null);
+            if (st) { freed += st.size; await fs.rm(f, { force: true }); }
+          } catch {}
+        }
+        await logEvent("task_local_deleted", `${upstreamId} 已从本地删除${freed ? `（释放 ${(freed / 1048576).toFixed(1)}MB）` : ""}`, {
+          accountId: row.accountId,
+        });
+        emit("task", { upstreamId, deleted: true, provider: row.provider });
+        return json(res, 200, { ok: true, freed, files: files.length });
       }
 
       const taskMatch = p.match(/^\/api\/tasks\/([^/]+)\/([^/]+)$/);

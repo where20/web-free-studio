@@ -127,16 +127,11 @@
   .filterseg{margin:0 0 0 auto;width:auto;flex:0 0 auto}
   .filterseg button{padding:4px 12px}
   /* 设置中心：账号池 + 运行日志默认收纳，展开后两栏 */
-  .settings-center{max-width:1320px;margin:0 auto 28px;width:calc(100% - 40px);background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
-  .settings-center>summary{list-style:none;cursor:pointer;padding:13px 16px;display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;color:var(--ink)}
-  .settings-center>summary::-webkit-details-marker{display:none}
-  .settings-center>summary .caret{display:inline-block;color:var(--sub);transition:transform .15s}
-  .settings-center[open]>summary .caret{transform:rotate(90deg)}
-  .settings-center>summary .sub{font-weight:400;color:var(--sub);font-size:12px}
-  .settings-center>summary .pill{margin-left:auto}
-  .settings-body{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:0 16px 16px}
-  @media(max-width:960px){.settings-body{grid-template-columns:1fr}}
-  .settings-body .log{max-height:320px}
+  .settings-body{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:900px){.settings-body{grid-template-columns:1fr!important}}
+  .settings-body .log{max-height:52vh}
+  .plat-group{margin:6px 0 4px;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--sub);letter-spacing:.3px}
+  .plat-group::after{content:"";flex:1;height:1px;background:var(--line)}
 </style>
 </head>
 <body>
@@ -147,6 +142,7 @@
     <span class="pill" id="live"><span class="dot"></span><span>连接中…</span></span>
     <span class="pill" id="syncinfo">尚未同步</span>
     <a class="linkbtn" id="siteEntry" href="https://www.paba.tv/#video" target="_blank" rel="noopener">打开原站 ↗</a>
+    <button id="btnSettings">⚙ 设置中心 <span class="pill" id="acctCount">0</span></button>
     <button id="btnAddTop">＋ 新增账号</button>
     <button id="btnSyncAll" class="primary">同步全部</button>
   </div>
@@ -247,24 +243,26 @@
   </section>
 </main>
 
-<details class="settings-center" id="settingsCenter">
-  <summary><span class="caret">▸</span> 设置中心 <span class="sub">账号池 · 运行日志</span><span class="pill" id="acctCount">0</span></summary>
-  <div class="settings-body">
-    <section class="card">
-      <h3>账号池 <span class="pill" id="poolSum"></span></h3>
-      <div class="queuebar" id="queuebar"></div>
-      <div class="body acct" id="accounts"></div>
-      <div class="body" style="border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button id="btnAddAcct" class="primary">＋ 新增账号</button>
-        <span class="hint" style="margin:0">每个账号独立浏览器 profile（登录态/设备态互不串号）；单账号每天 15 次、最多 2 条在途。提交时选「自动轮询」会在可用账号间均衡切换。</span>
-      </div>
-    </section>
-    <section class="card">
-      <h3>运行日志</h3>
-      <div class="log" id="log"></div>
-    </section>
+<div class="modal" id="settingsModal" hidden>
+  <div class="sheet" style="max-width:1080px">
+    <h4>设置中心 <span class="sub" style="font-weight:400;color:var(--sub);font-size:12px;margin-left:8px">账号池 · 运行日志</span><button id="settingsClose" aria-label="关闭">×</button></h4>
+    <div class="settings-body" style="grid-template-columns:1.15fr .85fr;padding:0 18px 18px">
+      <section class="card" style="margin:0">
+        <h3>账号池 <span class="pill" id="poolSum"></span></h3>
+        <div class="queuebar" id="queuebar"></div>
+        <div class="body acct" id="accounts"></div>
+        <div class="body" style="border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button id="btnAddAcct" class="primary">＋ 新增账号</button>
+          <span class="hint" style="margin:0">各平台账号相互独立、互不串号；提交时按当前平台隔离轮询。</span>
+        </div>
+      </section>
+      <section class="card" style="margin:0">
+        <h3>运行日志</h3>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
   </div>
-</details>
+</div>
 
 <div class="modal" id="addModal" hidden>
   <div class="sheet">
@@ -402,74 +400,100 @@ const fmtBytes = (n) => (n > 1e9 ? (n / 1e9).toFixed(2) + " GB" : n > 1e6 ? (n /
 const fmtTime = (ts) => (ts ? new Date(ts).toLocaleString("zh-CN", { hour12: false }) : "-");
 const acctById = (id) => STATE.accounts.find((a) => a.id === id) || null;
 
+const PROVIDER_META = {
+  paba: { label: "PabaTV", hint: "h3v 体系 · 每账号 15 次/天" },
+  dreamina: { label: "即梦 Dreamina", hint: "字节 passport · agent 会话通道" },
+};
+
+function renderAccountItem(a) {
+  const used = a.usage?.consumed ?? 0;
+  const limit = a.usage?.limit ?? STATE.limits.freeDailyLimit ?? 15;
+  const pct = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+  const isDm = (a.provider || "paba") === "dreamina";
+  const item = document.createElement("div");
+  item.className = "item" + (a.id === activeAccount ? " active" : "") + (a.disabled ? " off" : "");
+  item.innerHTML = `
+    <span class="dot ${a.status}"></span>
+    <div class="meta">
+      <div class="name">${a.label || a.id}${a.disabled ? " · 已停用" : ""}</div>
+      <div class="sub">${a.upstreamUserId || "未授权"} · 已消耗 <b>${used}</b>/${limit} 次 · 在途 ${a.active ?? 0}</div>
+      <div class="bar"><i class="${used >= limit ? "full" : ""}" style="width:${pct}%"></i></div>
+    </div>
+    <div class="ops">
+      <button data-op="pick">选用</button>
+      <button data-op="sync">同步</button>
+      <button data-op="login">授权</button>
+      ${a.needsChallenge ? '<button data-op="challenge">验证</button>' : ""}
+      <button data-op="edit">编辑</button>
+      <button data-op="toggle">${a.disabled ? "启用" : "停用"}</button>
+      <button data-op="del" style="color:#c53030">删除</button>
+    </div>`;
+  item.querySelectorAll("button").forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const op = b.dataset.op;
+      if (op === "pick") { activeAccount = a.id; localStorage.setItem("fs.account", a.id); renderAccounts(); renderForm(); return; }
+      b.disabled = true;
+      try {
+        if (op === "sync") { await api(`/api/accounts/${a.id}/sync`, { method: "POST" }); toast("已同步 " + a.label); }
+        if (op === "login") {
+          await api(`/api/accounts/${a.id}/login`, { method: "POST" });
+          const isEgo = (a.backend || "chrome") === "ego";
+          toast(isEgo ? "已在 ego 浏览器打开登录页，请完成登录…" : "已打开登录窗口，请完成授权…");
+          await refresh();
+          const done = await waitOnline(a.id, 120000);
+          if (!done) {
+            toast(isEgo
+              ? "登录未完成：请在 ego 浏览器窗口内完成登录；也可改用「导入 Cookie」"
+              : "登录未完成：受控 Chrome 可能起不来，试试「导入 Cookie」", true);
+            addModal.hidden = false; switchTab("cookie");
+          } else toast("授权成功");
+        }
+        if (op === "challenge") { toast("已打开人机验证窗口，请在弹窗内完成…"); await api(`/api/accounts/${a.id}/challenge`, { method: "POST" }); toast("验证完成"); }
+        if (op === "edit") { openEdit(a.id); return; }
+        if (op === "toggle") { await api(`/api/accounts/${a.id}/toggle`, { method: "POST", body: JSON.stringify({ disabled: !a.disabled }) }); }
+        if (op === "del") {
+          if (!confirm(`从账号池删除「${a.label}」？\n\n· 本地已下载的成片会保留\n· 浏览器 profile 默认保留（可重新授权）`)) { b.disabled = false; return; }
+          await api(`/api/accounts/${a.id}/delete`, { method: "POST", body: JSON.stringify({ purge: false }) });
+          if (activeAccount === a.id) { activeAccount = ""; localStorage.removeItem("fs.account"); }
+          toast("已删除账号 " + a.label);
+        }
+        await refresh();
+      } catch (err) { toast(err.message, true); }
+      finally { b.disabled = false; }
+    };
+  });
+  return item;
+}
+
 function renderAccounts() {
   const box = $("accounts");
   const list = STATE.accounts.filter((a) => a.status !== "removed");
   $("acctCount").textContent = list.length;
   const limit = STATE.limits.freeDailyLimit ?? 15;
   const conc = STATE.limits.maxActivePerAccount ?? 2;
+  // 按平台分组统计
+  const groups = { paba: [], dreamina: [] };
+  for (const a of list) (groups[(a.provider || "paba")] ||= []).push(a);
+  const onlineCount = (arr) => arr.filter((a) => a.status === "online" && !a.disabled).length;
   $("poolSum").textContent = list.length
-    ? `总 ${list.length * limit} 次/天 · 并发 ${list.length * conc}`
+    ? `Paba ${onlineCount(groups.paba)}/${groups.paba.length} · 即梦 ${onlineCount(groups.dreamina)}/${groups.dreamina.length}`
     : "未接入";
   box.innerHTML = "";
   if (!list.length) {
     box.innerHTML = `<div class="hint">还没有账号。下面新增一个，或终端运行 <code>npm run account</code>。</div>`;
+    return;
   }
-  for (const a of list) {
-    const used = a.usage?.consumed ?? 0;
-    const limit = a.usage?.limit ?? STATE.limits.freeDailyLimit ?? 15;
-    const pct = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
-    const item = document.createElement("div");
-    item.className = "item" + (a.id === activeAccount ? " active" : "") + (a.disabled ? " off" : "");
-    item.innerHTML = `
-      <span class="dot ${a.status}"></span>
-      <div class="meta">
-        <div class="name">${a.label || a.id}${(a.provider === "dreamina") ? '<span class="tag-pill dm">即梦</span>' : '<span class="tag-pill pb">Paba</span>'}${a.disabled ? " · 已停用" : ""}</div>
-        <div class="sub">${a.upstreamUserId || "未授权"} · 已消耗 <b>${used}</b>/${limit} 次 · 在途 ${a.active ?? 0}</div>
-        <div class="bar"><i class="${used >= limit ? "full" : ""}" style="width:${pct}%"></i></div>
-      </div>
-      <div class="ops">
-        <button data-op="pick">选用</button>
-        <button data-op="sync">同步</button>
-        <button data-op="login">授权</button>
-        ${a.needsChallenge ? '<button data-op="challenge">验证</button>' : ""}
-        <button data-op="edit">编辑</button>
-        <button data-op="toggle">${a.disabled ? "启用" : "停用"}</button>
-        <button data-op="del" style="color:#c53030">删除</button>
-      </div>`;
-    item.querySelectorAll("button").forEach((b) => {
-      b.onclick = async (e) => {
-        e.stopPropagation();
-        const op = b.dataset.op;
-        if (op === "pick") { activeAccount = a.id; localStorage.setItem("fs.account", a.id); renderAccounts(); renderForm(); return; }
-        b.disabled = true;
-        try {
-          if (op === "sync") { await api(`/api/accounts/${a.id}/sync`, { method: "POST" }); toast("已同步 " + a.label); }
-          if (op === "login") {
-            await api(`/api/accounts/${a.id}/login`, { method: "POST" });
-            toast("已打开登录窗口，请完成授权…");
-            await refresh();
-            const done = await waitOnline(a.id, 120000);
-            if (!done) {
-              toast("登录未完成：受控 Chrome 可能起不来，试试「导入 Cookie」", true);
-              addModal.hidden = false; switchTab("cookie");
-            } else toast("授权成功");
-          }
-          if (op === "challenge") { toast("已打开人机验证窗口，请在弹窗内完成…"); await api(`/api/accounts/${a.id}/challenge`, { method: "POST" }); toast("验证完成"); }
-          if (op === "edit") { openEdit(a.id); return; }
-          if (op === "toggle") { await api(`/api/accounts/${a.id}/toggle`, { method: "POST", body: JSON.stringify({ disabled: !a.disabled }) }); }
-          if (op === "del") {
-            if (!confirm(`从账号池删除「${a.label}」？\n\n· 本地已下载的成片会保留\n· 浏览器 profile 默认保留（可重新授权）`)) { b.disabled = false; return; }
-            await api(`/api/accounts/${a.id}/delete`, { method: "POST", body: JSON.stringify({ purge: false }) });
-            if (activeAccount === a.id) { activeAccount = ""; localStorage.removeItem("fs.account"); }
-            toast("已删除账号 " + a.label);
-          }
-          await refresh();
-        } catch (err) { toast(err.message, true); }
-        finally { b.disabled = false; }
-      };
-    });
-    box.appendChild(item);
+  // 平台分组渲染：PabaTV 在前、即梦在后
+  for (const key of ["paba", "dreamina"]) {
+    const arr = groups[key];
+    if (!arr || !arr.length) continue;
+    const meta = PROVIDER_META[key] || { label: key, hint: "" };
+    const head = document.createElement("div");
+    head.className = "plat-group";
+    head.innerHTML = `<span class="src ${key === "dreamina" ? "dreamina" : ""}" style="font-size:11px">${meta.label}</span><span style="font-weight:400;letter-spacing:0">${meta.hint} · ${onlineCount(arr)}/${arr.length} 在线</span>`;
+    box.appendChild(head);
+    for (const a of arr) box.appendChild(renderAccountItem(a));
   }
 }
 
@@ -779,7 +803,9 @@ function renderTasks() {
         <button data-op="play">${localUrl ? "打开文件" : "上游查看"}</button>
         ${isVeda
           ? (["done", "failed", "cancelled"].includes(t.status) ? "" : `<button data-op="cancel">取消</button>`)
-          : (isSiftq || isDreamina) ? "" : `<button data-op="del">删除</button>`}
+          : ""}
+        ${(!isVeda && !isSiftq && !isDreamina) ? `<button data-op="del">上游删除</button>` : ""}
+        <button data-op="localdel" style="color:#c53030">删本地</button>
       </div>`;
     el.querySelector('[data-op="copy"]').onclick = () => {
       $("prompt").value = t.prompt || "";
@@ -808,6 +834,17 @@ function renderTasks() {
       if (!confirm("从上游删除这条记录？本地已下载的成片会保留。")) return;
       try { await api(`/api/tasks/${t.accountId}/${t.upstreamId}`, { method: "DELETE" }); toast("已删除"); await refresh(); }
       catch (e) { toast(e.message, true); }
+    };
+    const localDelBtn = el.querySelector('[data-op="localdel"]');
+    if (localDelBtn) localDelBtn.onclick = async () => {
+      const hasFile = Boolean(t.asset?.video);
+      if (!confirm(`从本地删除这条${t.status === "failed" ? "失败" : ""}记录${hasFile ? "和成片文件" : ""}？\n\n· 只删本地，不动上游\n· 删除后不可恢复`)) return;
+      localDelBtn.disabled = true;
+      try {
+        const out = await api(`/api/tasks/local/${encodeURIComponent(t.upstreamId)}`, { method: "DELETE" });
+        toast(out.freed ? `已删除，释放 ${(out.freed / 1048576).toFixed(1)}MB` : "已删除");
+        await refresh();
+      } catch (e) { toast(e.message, true); localDelBtn.disabled = false; }
     };
     box.appendChild(el);
   }
@@ -1392,12 +1429,13 @@ document.querySelectorAll("#sourceSeg button").forEach((b) => {
 });
 $("pabaFields").hidden = SOURCE !== "paba";
 
-// 设置中心：默认收纳，展开状态持久化（避免每次刷新都要重新展开）
+// 设置中心：弹窗
 (function initSettingsCenter() {
-  const box = $("settingsCenter");
-  if (!box) return;
-  box.open = localStorage.getItem("fs.settingsOpen") === "1";
-  box.addEventListener("toggle", () => localStorage.setItem("fs.settingsOpen", box.open ? "1" : "0"));
+  const modal = $("settingsModal");
+  if (!modal) return;
+  $("btnSettings").onclick = () => { modal.hidden = false; };
+  $("settingsClose").onclick = () => { modal.hidden = true; };
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
 })();
 
 refresh().then(connect).catch((e) => toast("加载失败：" + e.message, true));
