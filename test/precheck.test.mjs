@@ -64,3 +64,50 @@ test("即梦：文案相对时长偏长 → warn", () => {
   assert.equal(r.level, "warn");
   assert.ok(r.issues.some((i) => /口播/.test(i.msg)));
 });
+
+test("即梦：正文写 768p/1080p → warn（agent 会反问改清晰度）", () => {
+  const r = precheckPrompt("dreamina", { prompt: "女主角面对镜头介绍产品，1080p 高清", duration: 10 });
+  assert.equal(r.ok, true);
+  assert.ok(r.issues.some((i) => i.level === "warn" && /720P/.test(i.msg) && /1080P|768P|清晰度/.test(i.msg)));
+});
+
+test("即梦：有口播意图但缺台词 → warn（agent 必反问）", () => {
+  const r = precheckPrompt("dreamina", {
+    prompt: "一位年轻女性面对镜头亲切分享产品，语速紧凑清晰，嘴型与台词同步",
+    duration: 10,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.level, "warn");
+  assert.ok(r.issues.some((i) => /台词|口播/.test(i.msg) && /反问|补充/.test(i.msg)));
+});
+
+test("即梦：有台词（口播：…）→ 不再报缺台词", () => {
+  const r = precheckPrompt("dreamina", {
+    prompt: "一位女性面对镜头分享产品。口播：这款真的太好用了，赶紧下单",
+    duration: 10,
+  });
+  assert.ok(!r.issues.some((i) => /没写具体台词/.test(i.msg)));
+});
+
+test("即梦：有引号包住的具体台词 → 不报缺台词", () => {
+  const r = precheckPrompt("dreamina", {
+    prompt: "女主面对镜头说：“今天给大家推荐这款，真的绝了”",
+    duration: 10,
+  });
+  assert.ok(!r.issues.some((i) => /没写具体台词/.test(i.msg)));
+});
+
+test("即梦：短时长+多镜头 → warn", () => {
+  const r = precheckPrompt("dreamina", {
+    prompt: "镜头1大全景，镜头2中景人物，镜头3特写产品，镜头切换流畅",
+    duration: 5,
+  });
+  assert.equal(r.ok, true);
+  assert.ok(r.issues.some((i) => /镜头|分镜|节奏/.test(i.msg)));
+});
+
+test("即梦：正常画面描述+时长 → 无 error/warn（可能仅 info）", () => {
+  const r = precheckPrompt("dreamina", { prompt: "橘猫在洒满阳光的窗台上伸懒腰，毛发清晰，镜头缓慢推近", duration: 10 });
+  assert.equal(r.ok, true);
+  assert.notEqual(r.level, "error");
+});

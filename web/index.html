@@ -1371,6 +1371,7 @@ async function runPrecheck() {
     provider,
     prompt: $("prompt").value || "",
     duration: Number($("duration").value) || 10,
+    aspect: $("ratio").value,
     mode: REF.mode,
     hasFirstFrame: Boolean(REF.first?.dataUrl),
     hasImage: Boolean(REF.first?.dataUrl),
@@ -1388,7 +1389,13 @@ async function runPrecheck() {
   box.innerHTML = out.issues.map((i) => `<div class="pi">${icon[i.level] || "•"} ${i.msg}</div>`).join("")
     + (out.normalized && provider === "dreamina" ? `<div class="pv"><i>实际发送：</i>${out.normalized.slice(0, 120)}${out.normalized.length > 120 ? "…" : ""}</div>` : "");
   if (out.level === "error") { toast("预检未通过，请看下方红字提示", true); return false; }
-  if (out.level === "warn") toast("预检有提醒，可继续提交");
+  if (out.level === "warn") {
+    // warn：先说清可能后果，让用户明确决定要不要照发（避免提交后被 agent 反问干等）
+    toast("预检有提醒，请看下方黄字", true);
+    const warnMsgs = out.issues.filter((i) => i.level === "warn").map((i) => "· " + i.msg).join("\n");
+    const go = confirm(`提交前预检发现 ${out.issues.filter((i) => i.level === "warn").length} 个提醒：\n\n${warnMsgs}\n\n仍要提交吗？\n（点「取消」返回修改，避免提交后被上游反问问答/失败）`);
+    return go;
+  }
   return true;
 }
 

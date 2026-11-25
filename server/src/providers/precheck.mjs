@@ -63,14 +63,38 @@ export function precheckPrompt(provider, input = {}) {
     if (specs.ratio || specs.dur || specs.res) add("warn", "SiftQ 正文禁写画幅/时长/分辨率（固定 9:16，时长用下拉），请去掉这些字样");
   } else if (provider === "dreamina") {
     if (prompt.length > 3000) add("error", `即梦提示词上限 3000 字（当前 ${prompt.length} 字）`);
-    if (specs.ratio || specs.res) {
-      add("info", "即梦会自动在开头加「使用seedance2.5,生成N秒…」，规格以表单下拉为准，正文里的画幅/清晰度可留可去");
+
+    // ① 清晰度：seedance 2.5 只支持 720P。正文若写了 768p/1080p/2k/4k，agent 会反问（实测）
+    const badRes = prompt.match(/\b(768p|1080p|2k|4k|8k)\b/i);
+    if (badRes) {
+      add("warn", `正文写了「${badRes[0].toUpperCase()}」，即梦 seedance 2.5 只支持 720P，agent 可能会反问要求你改清晰度（服务已强制 720P，建议正文删掉这个字样）`);
     }
+    if (specs.ratio) {
+      add("info", "正文里写了画幅，即梦会自动加规格前缀，画幅以表单下拉为准，建议正文去掉 16:9 等字样避免冲突");
+    }
+
+    // ② 口播意图但缺台词：prompt 提到口播/面对镜头/分享等，却没给具体台词 → agent 几乎必反问
+    const wantsVoice = /口播|面对镜头|对镜头|分享|介绍|推荐|安利|旁白|讲解|台词|讲述|口述|卖点/.test(prompt);
+    const hasScript =
+      /(口播|台词|文案|旁白|说)\s*[：:]/.test(prompt) || // 有「口播：xxx」段
+      /["“「][^"”」]{4,}["”」]/.test(prompt) || // 有引号包住的台词
+      /唱[：:]/.test(prompt); // 有「唱：xxx」
+    if (wantsVoice && !hasScript) {
+      add("warn", "提示词像是口播/人物介绍，但没写具体台词。即梦 agent 大概率会反问你「口播文案是什么」→ 建议先用「🎙 生成口播」补一段台词，或在 prompt 里加「口播：<具体台词>」");
+    }
+
+    // ③ 文案 / 台词 相对时长偏长 → 可能说不完或语速过快
     if (input.duration && cn > Number(input.duration) * 4.5 + 40) {
       add("warn", `文案约 ${cn} 字，按 ${input.duration}s 口播（~4.5 字/秒）偏长，可能说不完或语速过快`);
     }
-    // 预览即梦最终会发出去的 prompt（加规格前缀）
-    normalized = `使用seedance2.5,生成${input.duration || 10}秒视频，16:9，720P。${prompt}`;
+
+    // ④ 时长过短却要复杂运镜/多镜头 → 容易跑偏
+    if (input.duration && Number(input.duration) <= 5 && (prompt.match(/镜头|分镜|切换|特写/g) || []).length >= 3) {
+      add("warn", `${input.duration}s 内安排多个镜头/景别切换，节奏可能太赶，建议延长时长或减少分镜`);
+    }
+
+    // 预览即梦最终会发出去的 prompt（加规格前缀，清晰度固定 720P，画幅取表单）
+    normalized = `使用seedance2.5,生成${input.duration || 10}秒视频，${input.aspect || "16:9"}，720P。${prompt}`;
   }
 
   const hasError = issues.some((i) => i.level === "error");
