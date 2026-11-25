@@ -68,6 +68,10 @@
   .task:hover .media .play{opacity:1}
   .badge{position:absolute;top:8px;left:8px;font-size:11px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.92);color:#33404d;font-weight:600}
   .badge.done{color:var(--ok)} .badge.pending,.badge.queued,.badge.running{color:var(--warn)} .badge.failed,.badge.error{color:var(--err)}
+  .badge.needs_input{color:#7a45d6}
+  .bizask{margin:6px 0 2px;font-size:11.5px;line-height:1.5;color:#6b46c1;background:#f5f0ff;border:1px solid #e2d6ff;border-radius:7px;padding:6px 8px}
+  .bizask b{display:block;font-size:11px;color:#7a45d6;margin-bottom:2px}
+  .bizask button{margin-top:5px;border:1px solid #7a45d6;background:#fff;color:#7a45d6;font-size:11px;padding:2px 10px;border-radius:6px;cursor:pointer}
   .badge.local{left:auto;right:8px;background:#e8f7ee;color:var(--ok)}
   .badge.qpos{left:auto;right:8px;background:#fff5e5;color:#b26a00}
   .task .info{padding:10px 11px;display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;overflow:hidden}
@@ -465,6 +469,7 @@
       <div class="preview-media" id="pvMedia"></div>
       <div class="preview-side">
         <div class="prompt" id="pvPrompt"></div>
+        <div id="pvAsk" hidden></div>
         <div class="kv" id="pvKv"></div>
         <div class="preview-actions" id="pvActions"></div>
       </div>
@@ -759,6 +764,13 @@ const STAGE_TEXT = {
   referencing: "读参考", encoding: "读提示词", denoising: "生成中", decoding: "冲印中",
   done: "已完成", failed: "失败", cancelled: "已取消",
 };
+// 任务状态中文名（badge 用；缺省回退原值）
+const STATUS_TEXT = {
+  pending: "排队", queued: "排队中", running: "生成中", submitting: "提交中",
+  done: "已完成", failed: "失败", cancelled: "已取消",
+  needs_input: "待补充信息", logged_out: "已登出",
+};
+const statusLabel = (s) => STATUS_TEXT[s] || s;
 
 function setSource(src) {
   SOURCE = src;
@@ -1064,11 +1076,19 @@ function renderTasks() {
       media = `<div class="ph">${t.status === "done" ? "成片待同步" : (stage ? stage + step : pos)}<br/><span style="opacity:.6">${sub}</span></div>`;
     }
     const acct = acctById(t.accountId);
-    const badge = t.status === "pending" ? "排队" : t.status;
+    const badge = statusLabel(t.status);
+    // 即梦 agent 反问：needs_input 时展示 agent 的问题 + 去回答入口
+    const askBlock = (isDreamina && t.status === "needs_input") ? `
+      <div class="bizask">
+        <b>💬 即梦 agent 在等你回答</b>
+        ${(t.question || "agent 需要补充信息才能继续生成").replace(/</g, "&lt;").slice(0, 200)}
+        <button data-op="reply">去即梦页面回答</button>
+      </div>` : "";
     el.innerHTML = `
       <div class="media"><span class="badge ${t.status}">${isVeda ? (STAGE_TEXT[t.stage] || badge) : badge}</span>${media}</div>
       <div class="info">
         <div class="p" title="${(t.prompt || "").replace(/"/g, "&quot;")}">${t.prompt || "(无提示词)"}</div>
+        ${askBlock}
         <div class="tags">
           <span class="src ${isVeda ? "veda" : isSiftq ? "siftq" : isDreamina ? "dreamina" : ""}">${isVeda ? "VEDA" : isSiftq ? "SIFTQ" : isDreamina ? "即梦" : "PABA"}</span>
           <span>${acct ? acct.label : (isVeda || isSiftq ? "免账号" : isDreamina ? "agent 会话" : t.accountId)}</span>
@@ -1083,6 +1103,12 @@ function renderTasks() {
         ${rawUrl ? `<button data-op="wm" ${t.asset?.clean ? "disabled" : ""}>${t.asset?.clean ? "已去水印" : "去水印"}</button>` : ""}
         <button data-op="detail">详情</button>
       </div>`;
+    const replyBtn = el.querySelector('[data-op="reply"]');
+    if (replyBtn) replyBtn.onclick = (e) => {
+      e.stopPropagation();
+      window.open("https://dreamina.capcut.com/novel/detail/script?projectId=" + encodeURIComponent(DREAMINA?.session?.projectId || "1502254033156") + "&agent_thread_id=" + encodeURIComponent(DREAMINA?.session?.threadId || "ae8c252a-fc76-5baf-ad40-d7990735e384") + "&entrance_from=novel_page_agent_create", "_blank");
+      toast("已打开即梦会话，在对话框里回答 agent 的提问即可继续");
+    };
     el.querySelector('[data-op="copy"]').onclick = () => {
       $("prompt").value = t.prompt || "";
       $("duration").value = t.duration || 5;
@@ -1176,7 +1202,7 @@ function openPreview(t) {
   const localUrl = cleanUrl || rawUrl; // 详情也优先去水印版
   const thumb = (rawUrl || localUrl).replace(/\.mp4$/, ".jpg");
   const acct = acctById(t.accountId);
-  const badge = t.status === "pending" ? "排队" : t.status;
+  const badge = statusLabel(t.status);
 
   $("pvSrc").textContent = srcName;
   $("pvTitle").textContent = t.status === "done" ? "成片详情" : `${badge} · 任务详情`;
@@ -1194,6 +1220,17 @@ function openPreview(t) {
   }
 
   $("pvPrompt").textContent = t.prompt || "(无提示词)";
+  // 即梦反问：详情里也展示
+  const pvAsk = $("pvAsk");
+  if (pvAsk) {
+    if (isDreamina && t.status === "needs_input") {
+      pvAsk.hidden = false;
+      pvAsk.innerHTML = `<div class="bizask"><b>💬 agent 在等你回答</b>${(t.question || "需要补充信息").replace(/</g, "&lt;").slice(0, 400)}<button data-op="reply">去即梦页面回答</button></div>`;
+      pvAsk.querySelector('[data-op="reply"]').onclick = () => {
+        window.open("https://dreamina.capcut.com/novel/detail/script?projectId=" + encodeURIComponent(DREAMINA?.session?.projectId || "1502254033156") + "&agent_thread_id=" + encodeURIComponent(DREAMINA?.session?.threadId || "ae8c252a-fc76-5baf-ad40-d7990735e384") + "&entrance_from=novel_page_agent_create", "_blank");
+      };
+    } else { pvAsk.hidden = true; pvAsk.innerHTML = ""; }
+  }
 
   const rows = [
     ["状态", badge],
