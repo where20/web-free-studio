@@ -64,19 +64,19 @@ test("口播生成：空 prompt 不崩，退回通用模板", () => {
   assert.ok(out.text.length > 0);
 });
 
-test("三种语气各出一版：都非空，语气标签/开场不同", async () => {
-  const { buildAllTones } = await import("../server/src/providers/voiceover.mjs");
+test("多种语气各出一版：都非空，语气标签/开场不同", async () => {
+  const { buildAllTones, TONE_IDS } = await import("../server/src/providers/voiceover.mjs");
   const versions = buildAllTones("汉堡套餐，只要64.8元，4个汉堡，限时包邮", { duration: 15 });
-  assert.equal(versions.length, 3);
-  const tones = versions.map((v) => v.tone);
-  assert.deepEqual(tones, ["warm", "urgent", "calm"]);
+  assert.equal(versions.length, TONE_IDS.length);
+  assert.ok(TONE_IDS.length >= 6, "至少 6 种语气");
+  assert.deepEqual(versions.map((v) => v.tone), TONE_IDS);
   for (const v of versions) {
     assert.ok(v.text.length > 0);
     assert.ok(v.toneLabel);
   }
-  // 三条文案必须互不相同（语气差异）
+  // 每版文案必须互不相同（语气差异）
   const texts = new Set(versions.map((v) => v.text));
-  assert.equal(texts.size, 3, "三种语气应产出三条不同文案");
+  assert.equal(texts.size, versions.length, "每種语气应产出不同文案");
 });
 
 test("tone 参数生效：相同 prompt 不同语气，开场/号召不同", async () => {

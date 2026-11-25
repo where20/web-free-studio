@@ -32,6 +32,7 @@ import { vedaOverview, vedaGenerate, vedaSyncAll, vedaCancelJob } from "./veda-s
 import { siftqOverview, siftqGenerate, siftqSyncAll } from "./siftq-service.mjs";
 import { dreaminaOverview, dreaminaGenerate, dreaminaSyncAll } from "./dreamina-service.mjs";
 import { buildVoiceover, buildAllTones } from "./providers/voiceover.mjs";
+import { precheckPrompt } from "./providers/precheck.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -599,6 +600,12 @@ export function createServer() {
           return json(res, 200, { versions: buildAllTones(body.prompt, { duration: body.duration }) });
         }
         return json(res, 200, buildVoiceover(body.prompt, { duration: body.duration, tone: body.tone }));
+      }
+
+      /* ---------- 提交前预检 / 提示词体检（本地规则，零依赖） ---------- */
+      if (p === "/api/precheck" && req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 200, precheckPrompt(body.provider, body));
       }
 
       /* ---------- 即梦 Dreamina（agent 短剧会话通道，独立模块） ---------- */      if (p === "/api/dreamina/state") return json(res, 200, await dreaminaOverview());
