@@ -117,6 +117,13 @@
   .src{background:#eef3ff!important;color:#2f6df6!important}
   .src.veda{background:#f3ecff!important;color:#7a45d6!important}
   .src.siftq{background:#fff1e8!important;color:#c05621!important}
+  .src.dreamina{background:#e8fff5!important;color:#0a7d5a!important}
+  .tag-pill{display:inline-block;font-size:10px;padding:1px 6px;border-radius:6px;margin-left:6px;font-weight:600;vertical-align:middle}
+  .tag-pill.dm{background:#e8fff5;color:#0a7d5a}
+  .tag-pill.pb{background:#eef3ff;color:#2f6df6}
+  .plat-select{display:flex;gap:6px;margin-bottom:10px}
+  .plat-select button{flex:1;border:1px solid var(--line);background:var(--chip);color:var(--sub);padding:7px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .plat-select button.on{border-color:var(--brand);background:#eef3ff;color:#2f6df6;font-weight:600}
   .filterseg{margin:0 0 0 auto;width:auto;flex:0 0 auto}
   .filterseg button{padding:4px 12px}
   /* 设置中心：账号池 + 运行日志默认收纳，展开后两栏 */
@@ -153,6 +160,7 @@
         <button data-src="paba" class="on">PabaTV · 账号池</button>
         <button data-src="veda">Veda Studio · 免账号</button>
         <button data-src="siftq">SiftQ · H3 图生视频</button>
+        <button data-src="dreamina">即梦 · 账号接管</button>
       </div>
       <div id="pabaFields">
         <label class="f">账号</label>
@@ -260,6 +268,11 @@
 <div class="modal" id="addModal" hidden>
   <div class="sheet">
     <h4>新增账号<button id="addClose" aria-label="关闭">×</button></h4>
+    <div class="plat-select" id="addPlatform">
+      <button data-provider="paba" class="on">PabaTV</button>
+      <button data-provider="dreamina">即梦 Dreamina</button>
+    </div>
+    <div class="steps" id="addPlatHint" style="margin:0 0 10px">接入 PabaTV 账号池（h3v / h3s / __Host-h3d）。</div>
     <div class="tabs">
       <button data-tab="browser" class="on">浏览器登录</button>
       <button data-tab="cookie">粘贴 Cookie</button>
@@ -305,8 +318,8 @@
       <label class="f" style="margin-top:0">账号备注</label>
       <input id="addLabel3" placeholder="如 主账号" />
       <div class="steps" style="margin-top:10px">
-        接管本机 ego 浏览器里已登录的会话，无需再次登录。<br/>
-        ego 只有一个浏览器 profile，所以只能接管 <b>1 个</b>账号；第 2 个账号请用前两种方式。
+        接管本机 ego 浏览器里已登录的会话，无需再次登录。先在 ego 里登录好对应平台，再点「接管会话」。<br/>
+        每个账号是独立 taskSpace；若同一平台要接多个账号，请用「粘贴 Cookie」分别为每个账号导入登录态。
       </div>
       <div class="foot"><button id="addEgoGo" class="primary">接管会话</button></div>
     </div>
@@ -409,7 +422,7 @@ function renderAccounts() {
     item.innerHTML = `
       <span class="dot ${a.status}"></span>
       <div class="meta">
-        <div class="name">${a.label || a.id}${a.disabled ? " · 已停用" : ""}</div>
+        <div class="name">${a.label || a.id}${(a.provider === "dreamina") ? '<span class="tag-pill dm">即梦</span>' : '<span class="tag-pill pb">Paba</span>'}${a.disabled ? " · 已停用" : ""}</div>
         <div class="sub">${a.upstreamUserId || "未授权"} · 已消耗 <b>${used}</b>/${limit} 次 · 在途 ${a.active ?? 0}</div>
         <div class="bar"><i class="${used >= limit ? "full" : ""}" style="width:${pct}%"></i></div>
       </div>
@@ -472,8 +485,12 @@ const STAGE_TEXT = {
 function setSource(src) {
   SOURCE = src;
   localStorage.setItem("fs.source", src);
-  document.querySelectorAll("#sourceSeg button").forEach((b) => b.classList.toggle("on", b.dataset.src === src));
-  $("pabaFields").hidden = src !== "paba";
+  document.querySelectorAll("#sourceSeg button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.src === src);
+    b.classList.toggle("src", ["veda", "siftq", "dreamina"].includes(b.dataset.src));
+  });
+  // 即梦与 Paba 都用账号池下拉；Veda/SiftQ 免账号
+  $("pabaFields").hidden = !["paba", "dreamina"].includes(src);
   // 先按来源把表单切好，别等上游额度回来（网络慢时表单会卡在旧状态）
   renderForm(); renderQuota();
   if (src === "veda") refreshVeda().then(() => { renderQuota(); });
@@ -492,7 +509,11 @@ document.querySelectorAll("#taskFilter button").forEach((b) => { b.onclick = () 
 
 function renderForm() {
   const sel = $("account");
-  const list = STATE.accounts.filter((a) => a.status !== "removed" && !a.disabled);
+  // 按当前源隔离账号池：即梦只列 dm- 账号，Paba 只列非 dm- 账号
+  const wantProvider = SOURCE === "dreamina" ? "dreamina" : "paba";
+  const list = STATE.accounts.filter(
+    (a) => a.status !== "removed" && !a.disabled && (a.provider || "paba") === wantProvider,
+  );
   const autoOpt = `<option value="">⚡ 自动轮询（按额度/在途切换，推荐）</option>`;
   sel.innerHTML = autoOpt + (list.length
     ? list.map((a) => {
@@ -526,6 +547,11 @@ function renderForm() {
     d.min = 6; d.max = 15; d.step = 1;
     if (!SIFTQ_DURATIONS.includes(Number(d.value))) d.value = 6;
     $("prompt").placeholder = "用英文描述输入图里要发生的动作，例如：The player lifts the trophy and turns to the crowd.（prompt 真实生效）";
+  } else if (SOURCE === "dreamina") {
+    m.innerHTML = `<option value="dreamina-novel">即梦 · AI 剧本编剧</option>`;
+    r.innerHTML = PABA_ASPECTS.map((a) => `<option>${a}</option>`).join("");
+    d.min = 4; d.max = 15; d.step = 1;
+    $("prompt").placeholder = "即梦账号已接入，可在此管理登录态。生成端点待接入（当前未抓到上游提交接口），暂时不能提交生成。";
   } else {
     r.disabled = false;
     const models = STATE.models || [];
@@ -556,6 +582,14 @@ function renderForm() {
 
 function renderQuota() {
   const line = $("quotaLine");
+  if (SOURCE === "dreamina") {
+    const dm = STATE.accounts.filter((a) => (a.provider || "paba") === "dreamina" && a.status !== "removed");
+    const online = dm.filter((a) => a.status === "online" && !a.disabled);
+    line.innerHTML = `<span>即梦账号 <b>${online.length}</b>/${dm.length} 在线 · 账号接管与登录态管理</span>`;
+    $("btnGen").disabled = true;
+    $("genHint").textContent = "生成端点待接入（当前账号点数 0、上游生成按钮不可用，无法抓到提交接口）。账号可正常接管/导入/同步，待有额度后补生成链路。";
+    return;
+  }
   if (SOURCE === "veda") {
     const v = VEDA || {};
     const q = v.quota;
@@ -610,7 +644,10 @@ function renderQuota() {
   }
 
   const picked = $("account").value;
-  const usable = STATE.accounts.filter((a) => a.status !== "removed" && !a.disabled && a.status === "online");
+  // 只统计 Paba 账号：即梦账号不参与 Paba 的额度/在途展示与轮询
+  const usable = STATE.accounts.filter(
+    (a) => (a.provider || "paba") === "paba" && a.status !== "removed" && !a.disabled && a.status === "online",
+  );
   const a = picked ? acctById(picked) : null;
 
   if (!picked) {
@@ -781,6 +818,9 @@ function renderSyncInfo() {
   } else if (SOURCE === "siftq") {
     $("siteEntry").href = SIFTQ?.entryPage || "https://siftq.com/minimax-h3/try";
     $("siteEntry").textContent = "打开 SiftQ ↗";
+  } else if (SOURCE === "dreamina") {
+    $("siteEntry").href = "https://dreamina.capcut.com/ai-tool/novel";
+    $("siteEntry").textContent = "打开即梦 ↗";
   } else if (STATE.siteEntry) {
     $("siteEntry").href = STATE.siteEntry;
     $("siteEntry").textContent = "打开原站 ↗";
@@ -807,11 +847,17 @@ async function refresh() {
   STATE = await api("/api/state");
   if (SOURCE === "veda") await refreshVeda();
   if (SOURCE === "siftq") await refreshSiftq();
+  // 同步 source 按钮高亮/配色（首屏 SOURCE 可能来自 localStorage）
+  document.querySelectorAll("#sourceSeg button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.src === SOURCE);
+    b.classList.toggle("src", ["veda", "siftq", "dreamina"].includes(b.dataset.src));
+  });
   renderAll();
 }
 
 $("btnGen").onclick = async () => {
   const prompt = $("prompt").value.trim();
+  if (SOURCE === "dreamina") return toast("即梦生成端点待接入，目前仅支持账号接管/导入/同步", true);
   if (!prompt) return toast("先写提示词", true);
   const btn = $("btnGen");
   btn.disabled = true; btn.textContent = "提交中…";
@@ -873,6 +919,15 @@ $("btnSync").onclick = async () => {
   try {
     if (SOURCE === "veda") { await api("/api/veda/sync", { method: "POST" }); await refresh(); toast("Veda 已对账"); return; }
     if (SOURCE === "siftq") { await api("/api/siftq/sync", { method: "POST" }); await refresh(); toast("SiftQ 已对账"); return; }
+    if (SOURCE === "dreamina") {
+      const id = $("account").value;
+      if (id) await api(`/api/accounts/${id}/sync`, { method: "POST" });
+      else {
+        const dm = STATE.accounts.filter((a) => (a.provider || "paba") === "dreamina" && a.status !== "removed");
+        for (const a of dm) if (a.status === "online") await api(`/api/accounts/${a.id}/sync`, { method: "POST" }).catch(() => {});
+      }
+      await refresh(); toast("即梦登录态已校验"); return;
+    }
     const id = $("account").value;
     if (id) await api(`/api/accounts/${id}/sync`, { method: "POST" }); else await api("/api/sync", { method: "POST" });
     await refresh();
@@ -921,14 +976,38 @@ document.querySelectorAll("#addModal .tabs button").forEach((b) => {
   b.onclick = () => switchTab(b.dataset.tab);
 });
 
+// 新增账号时选的平台：决定 provider、cookie 提示文案、id 前缀
+let ADD_PROVIDER = "paba";
+const PLAT_HINT = {
+  paba: "接入 PabaTV 账号池（h3v / h3s / __Host-h3d）。",
+  dreamina: "接入即梦 Dreamina（字节 passport：sessionid / sid_tt / uid_tt / ttwid / msToken）。导出时请复制 .capcut.com 域下的登录 cookie。",
+};
+document.querySelectorAll("#addPlatform button").forEach((b) => {
+  b.onclick = () => {
+    ADD_PROVIDER = b.dataset.provider;
+    document.querySelectorAll("#addPlatform button").forEach((x) => x.classList.toggle("on", x === b));
+    $("addPlatHint").textContent = PLAT_HINT[ADD_PROVIDER];
+    $("addCookies").placeholder = ADD_PROVIDER === "dreamina"
+      ? '[{"name":"sessionid","value":"...","domain":".capcut.com"},{"name":"sid_tt","value":"..."},{"name":"uid_tt","value":"..."},{"name":"ttwid","value":"..."}]'
+      : '[{"name":"h3v","value":"...","path":"/","httpOnly":true},{"name":"h3s","value":"...","path":"/","httpOnly":true},{"name":"__Host-h3d","value":"...","path":"/","httpOnly":true}]';
+    // 即梦不支持密码登录（滑块验证），隐藏该 tab
+    const pwTab = document.querySelector('#addModal .tabs button[data-tab="password"]');
+    if (pwTab) pwTab.style.display = ADD_PROVIDER === "dreamina" ? "none" : "";
+    if (ADD_PROVIDER === "dreamina" && document.querySelector('#addModal .tabs button[data-tab="password"].on')) switchTab("cookie");
+  };
+});
+
 async function createAccount(label, backend, btn, busyText) {
+  const provider = ADD_PROVIDER;
   const name = (label || "").trim() || `账号${STATE.accounts.length + 1}`;
   let id = name.toLowerCase().replace(/[^\w-]/g, "-").replace(/^-+/, "");
   if (!id || /^-+$/.test(id)) id = `acct-${Date.now().toString(36)}`;
+  // Dreamina 账号强制 dm- 前缀，避免与 Paba 账号 cookie/usage 文件串号
+  if (provider === "dreamina" && !id.startsWith("dm-")) id = `dm-${id}`;
   const old = btn.textContent;
   btn.disabled = true; btn.textContent = busyText;
   try {
-    await api("/api/accounts", { method: "POST", body: JSON.stringify({ id, label: name, backend }) });
+    await api("/api/accounts", { method: "POST", body: JSON.stringify({ id, label: name, backend, provider }) });
     return id;
   } finally {
     btn.disabled = false; btn.textContent = old;
@@ -958,9 +1037,12 @@ $("addBrowserGo").onclick = async () => {
 };
 
 $("openLoginPage").onclick = async () => {
-  try { await api("/api/open-site", { method: "POST" }); }
+  const site = ADD_PROVIDER === "dreamina" ? "https://dreamina.capcut.com/ai-tool/novel" : "https://www.paba.tv/#video";
+  try { await api(`/api/open-site?url=${encodeURIComponent(site)}`, { method: "POST" }); }
   catch (e) { toast(e.message, true); return; }
-  toast("已用系统浏览器打开 paba.tv，登录后按 F12 → Application → Cookies 复制 h3v / h3s / __Host-h3d");
+  toast(ADD_PROVIDER === "dreamina"
+    ? "已打开即梦，登录后 F12 → Application → Cookies，复制 .capcut.com 域下的 sessionid / sid_tt / uid_tt / ttwid / msToken"
+    : "已用系统浏览器打开 paba.tv，登录后按 F12 → Application → Cookies 复制 h3v / h3s / __Host-h3d");
 };
 
 $("addCookieGo").onclick = async () => {

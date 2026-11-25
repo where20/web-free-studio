@@ -1,5 +1,5 @@
 import { laneFor, ChallengeError, AuthError } from "./lane.mjs";
-import { RUNTIME } from "./config.mjs";
+import { RUNTIME, providerConfig } from "./config.mjs";
 import {
   upsertAccount,
   upsertTask,
@@ -126,6 +126,7 @@ export function syncAccount(account, opts = {}) {
 
 async function syncAccountInner(account, { limit = RUNTIME.listLimit, mirror = true, maxMirror } = {}) {
   const lane = laneFor(account);
+  const cfg = providerConfig(account);
   const started = Date.now();
   let synced = 0;
   let queued = 0;
@@ -145,6 +146,28 @@ async function syncAccountInner(account, { limit = RUNTIME.listLimit, mirror = t
     } else {
       await upsertAccount({ id: account.id, status: "logged_out" });
       throw new AuthError("登录态失效，请重新授权该账号");
+    }
+
+    // 没有上游任务列表接口的平台（如 Dreamina）：只校验身份，不拉任务。
+    // 生成端点尚未接入，额度留待接入提交链路时再校准（本地账本按 0 处理）。
+    if (!cfg.hasListTasks) {
+      await upsertAccount({
+        id: account.id,
+        status: "online",
+        lastSyncAt: Date.now(),
+        lastSyncMs: Date.now() - started,
+        lastError: null,
+        needsChallenge: false,
+      });
+      emit("sync", {
+        accountId: account.id,
+        synced: 0,
+        queued: 0,
+        downloaded: 0,
+        mirroredBytes: 0,
+        provider: cfg.id,
+      });
+      return { accountId: account.id, synced: 0, provider: cfg.id };
     }
 
     const res = await lane.listTasks(limit);

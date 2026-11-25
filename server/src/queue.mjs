@@ -280,9 +280,12 @@ export function rankAccounts(scored) {
 }
 
 /** 未指定账号时的自适应轮询选择：在线可用账号里按 rankAccounts 挑第一个 */
-export async function pickAccountId() {
+export async function pickAccountId(provider = "paba") {
   const { listAccounts } = await import("./store.mjs");
-  const accounts = (await listAccounts()).filter((a) => a.status === "online" && !a.disabled);
+  // 严格按 provider 隔离：Paba 排产绝不挑到 Dreamina 账号（域名/cookie 不通用）
+  const accounts = (await listAccounts()).filter(
+    (a) => (a.provider || "paba") === provider && a.status === "online" && !a.disabled,
+  );
   if (!accounts.length) throw new Error("没有可用账号，请先授权");
   const scored = [];
   for (const a of accounts) {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DATA_DIR } from "./config.mjs";
+import { DATA_DIR, providerConfig } from "./config.mjs";
 
 const DIR = path.join(DATA_DIR, "accounts");
 const COOKIE_NAMES = ["h3v", "h3s", "__Host-h3d"];
@@ -27,15 +27,16 @@ export async function readCookies(accountId) {
   }
 }
 
-export async function writeCookies(accountId, cookies) {
+export async function writeCookies(accountId, cookies, provider) {
   await ensure();
+  const cfg = providerConfig(provider);
   const clean = (cookies || [])
     .filter((c) => c && c.name && typeof c.value === "string")
     .map((c) => ({
       name: c.name,
       value: c.value,
       path: c.path || "/",
-      domain: c.domain || "www.paba.tv",
+      domain: c.domain || cfg.cookieDomain,
       httpOnly: c.httpOnly !== false,
       secure: c.secure !== false,
       expires: Number(c.expires || 0) || undefined,

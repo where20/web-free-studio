@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import fssync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUNTIME, WEB_DIR, ASSET_DIR, UPSTREAM, FREE_MODELS, PROFILE_DIR } from "./config.mjs";
+import { RUNTIME, WEB_DIR, ASSET_DIR, UPSTREAM, FREE_MODELS, PROFILE_DIR, providerConfig } from "./config.mjs";
 import {
   snapshot,
   listAccounts,
@@ -200,10 +200,11 @@ async function ensureBrowser(accountId, { headless }) {
 export async function loginAccount(accountId, { timeoutMs = 300_000 } = {}) {
   const account = await getAccount(accountId);
   if (!account) throw new Error(`账号不存在：${accountId}`);
+  const cfg = providerConfig(account);
   const browser = await ensureBrowser(accountId, { headless: false });
   const page = await Page.open(browser.port, "about:blank");
   try {
-    await page.goto(UPSTREAM.loginPage, { timeoutMs: 45_000 });
+    await page.goto(cfg.loginPage, { timeoutMs: 45_000 });
   } catch (e) {
     throw Object.assign(new Error(`登录页没能加载：${e.message}`), { code: "chrome_unavailable" });
   }
@@ -218,12 +219,12 @@ export async function loginAccount(accountId, { timeoutMs = 300_000 } = {}) {
   emit("login", { accountId, phase: "awaiting_user" });
 
   let deadStrikes = 0;
+  const meExpr = `fetch(${JSON.stringify(cfg.mePath)},{credentials:'include'}).then(r=>r.json()).catch(()=>({}))`;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const r = await page
-      .evaluate(`fetch('/auth/me',{credentials:'include'}).then(r=>r.json()).catch(()=>({}))`)
-      .catch(() => null);
-    const v = r?.result?.value ?? r?.value;
+    const r = await page.evaluate(meExpr).catch(() => null);
+    const raw = r?.result?.value ?? r?.value;
+    const v = raw ? cfg.parseMe(raw) : raw;
     if (!v) {
       deadStrikes += 1;
       if (page.closed || deadStrikes >= 4) {
@@ -291,16 +292,17 @@ export async function seedCookies(accountId, cookies) {
   const account = await getAccount(accountId);
   if (!account || account.status === "removed") throw bad(`账号不存在：${accountId}`);
   if (!Array.isArray(cookies) || !cookies.length) throw bad("cookies 为空");
-  if (!cookies.some((c) => c.name === "h3v")) {
-    throw bad("缺少 h3v（身份 cookie），至少要有 h3v / h3s / __Host-h3d 三条");
+  const cfg = providerConfig(account);
+  if (!cookies.some((c) => c.name === cfg.identityCookie)) {
+    throw bad(`缺少 ${cfg.identityCookie}（身份 cookie），请导入完整登录态（${cfg.cookieNames.join(" / ")}）`);
   }
-  await writeCookies(accountId, cookies);
+  await writeCookies(accountId, cookies, account.provider);
   const lane = laneFor(account);
   const me = await lane.me();
   if (!me?.ok) {
     await deleteCookies(accountId);
     await logEvent("cookie_seed_failed", `[${account.label}] cookie 校验失败`, { accountId });
-    throw bad("cookie 无效或已过期（/auth/me 返回未登录）");
+    throw bad(`cookie 无效或已过期（${cfg.id} 身份接口返回未登录）`);
   }
   await upsertAccount({
     id: accountId,
@@ -526,8 +528,9 @@ export function createServer() {
       // 兜底：用系统默认浏览器打开登录页（受控 Chrome 起不来时，人工登录 + 导出 Cookie）
       if (p === "/api/open-site") {
         const target = url.searchParams.get("url") || UPSTREAM.loginPage;
-        if (!target.startsWith("https://www.paba.tv")) {
-          return json(res, 400, { error: "只允许打开 paba.tv" });
+        const allowed = ["https://www.paba.tv", "https://dreamina.capcut.com"];
+        if (!allowed.some((prefix) => target.startsWith(prefix))) {
+          return json(res, 400, { error: "只允许打开已接入的平台（PabaTV / 即梦）" });
         }
         const cmd =
           process.platform === "darwin" ? ["open", [target]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", target]] : ["xdg-open", [target]];
@@ -556,17 +559,26 @@ export function createServer() {
         let id = String(body.id || "").replace(/[^\w-]/g, "").replace(/^-+|-+$/g, "");
         if (!id) id = `acct-${Date.now().toString(36)}`;
         const backend = body.backend || process.env.LANE || "chrome";
+        const provider = ["paba", "dreamina"].includes(body.provider) ? body.provider : "paba";
+        // id 必须全局唯一：Dreamina 账号请带 dm- 前缀（前端自动加），避免 cookie/usage 文件与 Paba 串号
+        const existing = await getAccount(id);
+        if (existing && (existing.provider || "paba") !== provider) {
+          throw Object.assign(new Error(`id「${id}」已被 ${existing.provider || "paba"} 占用，请换一个备注`), {
+            code: "validation",
+          });
+        }
         const account = await upsertAccount({
           id,
           label,
           status: "new",
           headless: true,
           backend,
+          provider,
           disabled: false,
           lastError: null,
           removedAt: null,
         });
-        await logEvent("account_added", `新增账号槽位 ${id}（${backend}）`, { accountId: id });
+        await logEvent("account_added", `新增账号槽位 ${id}（${provider} / ${backend}）`, { accountId: id });
         if (body.login) {
           const out = startLogin(id);
           return json(res, 200, { account: accountView(await getAccount(id)), login: out });

@@ -65,6 +65,72 @@ export const SIFTQ = {
   },
 };
 
+/**
+ * 第四个上游：即梦 Dreamina（字节 passport 登录体系，AI 剧本/短剧工作台）。
+ * 与 PabaTV 最大的差异：身份走 /passport/web/account/info，cookie 是字节全家桶
+ * （sessionid / sid_tt / uid_tt / ttwid…），域名 .capcut.com，且没有任务列表接口。
+ * 只接管真实登录态，不伪造身份 / 不换出口 IP / 不刷额度。
+ */
+export const DREAMINA = {
+  origin: "https://dreamina.capcut.com",
+  novelPage: "https://dreamina.capcut.com/ai-tool/novel",
+  accountId: "dreamina",
+  // 生成端点待抓（当前账号点数 0、生成按钮 disabled，无法拿到真实提交请求）
+  dailyCreditsFallback: 0,
+  maxActive: Number(process.env.DREAMINA_MAX_ACTIVE || 2),
+};
+
+/**
+ * 平台差异集中在这里；lane / cookies / sync / api 一律按 account.provider 取值。
+ * 缺省一律 paba，保证既有账号行为零变化。
+ */
+export const PROVIDERS = {
+  paba: {
+    id: "paba",
+    origin: "https://www.paba.tv",
+    videoPage: "https://www.paba.tv/#video",
+    loginPage: "https://www.paba.tv/#video",
+    challengePage: "https://www.paba.tv/__h3c/fresh.html",
+    contentHost: "https://media.paba.tv",
+    cookieDomain: "www.paba.tv",
+    cookieNames: ["h3v", "h3s", "__Host-h3d"],
+    identityCookie: "h3v",
+    cookieDomainRe: /paba\.tv$/,
+    cookieSetUrl: "https://www.paba.tv/",
+    mePath: "/auth/me",
+    loginPath: "/auth/account/login",
+    parseMe: (j) => ({ ok: j?.ok === true, user_id: j?.user_id }),
+    hasListTasks: true,
+  },
+  dreamina: {
+    id: "dreamina",
+    origin: DREAMINA.origin,
+    videoPage: DREAMINA.novelPage,
+    loginPage: DREAMINA.novelPage,
+    challengePage: null,
+    contentHost: null,
+    cookieDomain: ".capcut.com",
+    cookieNames: ["sessionid", "sessionid_ss", "sid_tt", "uid_tt", "uid_tt_ss", "ttwid", "msToken"],
+    identityCookie: "sessionid",
+    cookieDomainRe: /capcut\.com$/,
+    cookieSetUrl: "https://dreamina.capcut.com/",
+    mePath:
+      "/passport/web/account/info/?aid=513641&account_sdk_source=web&sdk_version=2.1.10-tiktok&language=zh-CN",
+    loginPath: null, // 字节登录带滑块/验证码，走浏览器人工登录或 cookie 导入
+    parseMe: (j) => ({ ok: Boolean(j?.data?.user_id_str), user_id: j?.data?.user_id_str }),
+    hasListTasks: false,
+    creditUrl: "https://commerce-api-sg.capcut.com/commerce/v1/benefits/user_credit",
+  },
+};
+
+export function providerConfig(accountOrId) {
+  const id =
+    typeof accountOrId === "string"
+      ? accountOrId
+      : accountOrId?.provider || "paba";
+  return PROVIDERS[id] || PROVIDERS.paba;
+}
+
 export const RUNTIME = {
   port: Number(process.env.PORT || 8790),
   headless: process.env.HEADED === "1" ? false : true,

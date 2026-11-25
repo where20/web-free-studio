@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { Page, sleep } from "./cdp.mjs";
 import { getBrowser } from "./chrome.mjs";
-import { ASSET_DIR, UPSTREAM } from "./config.mjs";
+import { ASSET_DIR, UPSTREAM, providerConfig } from "./config.mjs";
 import { readCookies, writeCookies } from "./cookies.mjs";
 
 export class AuthError extends Error {
@@ -64,6 +64,11 @@ class BaseLane {
     this.locked = Promise.resolve();
   }
 
+  /** 平台差异配置：默认 paba，Dreamina 走字节 passport 体系 */
+  get cfg() {
+    return providerConfig(this.account);
+  }
+
   get backend() {
     return this.account.backend || "chrome";
   }
@@ -82,7 +87,7 @@ class BaseLane {
   /** 从浏览器回读 cookie 并落盘（登录/换号后调用） */
   async captureCookies() {
     const rows = await this.readBrowserCookies();
-    if (rows.length) await writeCookies(this.accountId, rows);
+    if (rows.length) await writeCookies(this.accountId, rows, this.account.provider);
     return rows;
   }
 
@@ -128,8 +133,11 @@ class BaseLane {
     });
   }
 
-  me() {
-    return this.call("/auth/me");
+  async me() {
+    const raw = await this.call(this.cfg.mePath);
+    // 各平台身份接口形状不同，统一成 { ok, user_id, ...raw }
+    const parsed = this.cfg.parseMe(raw) || {};
+    return { ...raw, ...parsed };
   }
   listTasks(limit = 40) {
     return this.call(`/v1/videos?limit=${limit}`);
@@ -305,7 +313,7 @@ export class ChromeLane extends BaseLane {
     }
     const browser = this.browser;
     if (!(await browser.alive())) await browser.launch();
-    this.page = await Page.open(browser.port, UPSTREAM.videoPage);
+    this.page = await Page.open(browser.port, this.cfg.videoPage);
     await this.waitOrigin();
     const jar = await this.cookies();
     if (jar.length) {
@@ -321,10 +329,10 @@ export class ChromeLane extends BaseLane {
     while (Date.now() < deadline) {
       const r = await this.page.evaluate("({ href: location.href, ready: document.readyState })").catch(() => null);
       const v = r?.result?.value ?? r?.value;
-      if (v && v.href?.startsWith(UPSTREAM.origin) && v.ready !== "loading") return true;
+      if (v && v.href?.startsWith(this.cfg.origin) && v.ready !== "loading") return true;
       await sleep(200);
     }
-    throw new Error("页面未能进入 paba.tv 域");
+    throw new Error(`页面未能进入 ${this.cfg.origin} 域`);
   }
 
   async readBrowserCookies() {
@@ -332,7 +340,7 @@ export class ChromeLane extends BaseLane {
     await page.send("Network.enable");
     const res = await page.send("Network.getAllCookies");
     return (res.cookies || [])
-      .filter((c) => /paba\.tv$/.test(c.domain))
+      .filter((c) => this.cfg.cookieDomainRe.test(c.domain))
       .map((c) => ({
         name: c.name,
         value: c.value,
@@ -347,18 +355,26 @@ export class ChromeLane extends BaseLane {
   async applyCookieJar(jar, pageArg = null) {
     const page = pageArg || (await this.ensurePage());
     await page.send("Network.enable");
-    for (const n of ["h3v", "h3s", "__Host-h3d"]) {
-      await page.send("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }).catch(() => {});
+    for (const n of this.cfg.cookieNames) {
+      await page.send("Network.deleteCookies", { name: n, url: this.cfg.cookieSetUrl }).catch(() => {});
     }
+    const isDreamina = this.cfg.id === "dreamina";
     for (const c of jar) {
       await page
         .send("Network.setCookie", {
           name: c.name,
           value: c.value,
-          url: "https://www.paba.tv/",
-          path: "/",
-          httpOnly: true,
-          secure: true,
+          url: this.cfg.cookieSetUrl,
+          // Paba 保持历史行为（强制 httpOnly/secure、不传 domain）；
+          // 字节 passport 的 secure/httpOnly/domain 各异，必须原样注入才生效
+          ...(isDreamina
+            ? {
+                path: c.path || "/",
+                httpOnly: c.httpOnly !== false,
+                secure: c.secure !== false,
+                ...(c.domain ? { domain: c.domain } : {}),
+              }
+            : { path: "/", httpOnly: true, secure: true }),
           ...(c.expires ? { expires: c.expires } : {}),
         })
         .catch(() => {});
@@ -366,13 +382,18 @@ export class ChromeLane extends BaseLane {
   }
 
   async loginWithPassword(email, password) {
+    if (!this.cfg.loginPath) {
+      throw Object.assign(new Error(`${this.cfg.id} 不支持密码登录（字节登录有滑块验证），请改用 Cookie 导入或 ego 接管`), {
+        code: "login_unsupported",
+      });
+    }
     const page = await this.ensurePage();
     await page.send("Network.enable");
-    for (const n of ["h3v", "h3s", "__Host-h3d"]) {
-      await page.send("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }).catch(() => {});
+    for (const n of this.cfg.cookieNames) {
+      await page.send("Network.deleteCookies", { name: n, url: this.cfg.cookieSetUrl }).catch(() => {});
     }
     const res = await page.evaluate(
-      jsFetchExpr("/auth/account/login", {
+      jsFetchExpr(this.cfg.loginPath, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -386,8 +407,8 @@ export class ChromeLane extends BaseLane {
       });
     }
     const cookies = await this.readBrowserCookies();
-    if (!cookies.some((c) => c.name === "h3v")) throw new Error("登录后没有拿到会话 cookie");
-    await writeCookies(this.accountId, cookies);
+    if (!cookies.some((c) => c.name === this.cfg.identityCookie)) throw new Error("登录后没有拿到会话 cookie");
+    await writeCookies(this.accountId, cookies, this.account.provider);
     return payload.json;
   }
 
@@ -398,8 +419,9 @@ export class ChromeLane extends BaseLane {
   }
 
   async solveChallenge({ timeoutMs = 150_000 } = {}) {
+    if (!this.cfg.challengePage) throw new Error(`${this.cfg.id} 无独立验证页，请在浏览器内完成验证后重新同步`);
     const page = await this.ensurePage();
-    await page.goto(UPSTREAM.challengePage, { timeoutMs: 45_000 });
+    await page.goto(this.cfg.challengePage, { timeoutMs: 45_000 });
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const r = await page
@@ -407,7 +429,7 @@ export class ChromeLane extends BaseLane {
         .catch(() => null);
       const v = r?.result?.value ?? r?.value;
       if (v?.ok) {
-        await page.goto(UPSTREAM.videoPage, { timeoutMs: 45_000 });
+        await page.goto(this.cfg.videoPage, { timeoutMs: 45_000 });
         await sleep(400);
         return true;
       }
@@ -486,7 +508,7 @@ const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
 const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
 for (const p of await task.pages()) { try { await p.close(); } catch {} }
 const page = await task.newPage();
-await page.goto(${JSON.stringify(UPSTREAM.videoPage)}, { timeout: 45000 });
+await page.goto(${JSON.stringify(this.cfg.videoPage)}, { timeout: 45000 });
 console.log("__FS__" + JSON.stringify({ ok: true }));
 `;
     return this.execRaw(script, 90_000);
@@ -521,7 +543,7 @@ const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
 let page = (await task.pages())[0] || (await task.newPage());
 await page.cdp("Network.enable");
 const res = await page.cdp("Network.getAllCookies");
-const rows = (res.cookies || []).filter((c) => /paba\.tv$/.test(c.domain)).map((c) => ({
+const rows = (res.cookies || []).filter((c) => ${this.cfg.cookieDomainRe.toString()}.test(c.domain)).map((c) => ({
   name: c.name, value: c.value, path: c.path, domain: c.domain,
   httpOnly: c.httpOnly, secure: c.secure, expires: c.expires > 0 ? Math.floor(c.expires) : undefined,
 }));
@@ -533,7 +555,12 @@ console.log("__FS__" + JSON.stringify(rows));
 
   /** 用邮箱密码在该账号的环境里登录，成功后回读 cookie */
   async loginWithPassword(email, password) {
-    const expr = jsFetchExpr("/auth/account/login", {
+    if (!this.cfg.loginPath) {
+      throw Object.assign(new Error(`${this.cfg.id} 不支持密码登录（字节登录有滑块验证），请改用 Cookie 导入或 ego 接管`), {
+        code: "login_unsupported",
+      });
+    }
+    const expr = jsFetchExpr(this.cfg.loginPath, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
@@ -552,11 +579,43 @@ console.log("__FS__" + JSON.stringify(rows));
       });
     }
     const cookies = await this.readBrowserCookies();
-    if (!cookies.some((c) => c.name === "h3v")) {
+    if (!cookies.some((c) => c.name === this.cfg.identityCookie)) {
       throw new Error("登录后没有拿到会话 cookie");
     }
-    await writeCookies(this.accountId, cookies);
+    await writeCookies(this.accountId, cookies, this.account.provider);
     return payload.json;
+  }
+
+  /**
+   * 生成 ego 脚本里「导航到平台 + 注入 cookie」的公共片段。
+   * Paba 保持历史行为（强制 path/httpOnly/secure、不传 domain），
+   * 字节 passport 的 cookie 属性各异，按原始属性注入才生效。
+   */
+  egoInjectBlock(jar, inject) {
+    const cfg = this.cfg;
+    const raw = cfg.id === "dreamina";
+    return `
+const cur = await page.url();
+if (!String(cur).startsWith(${JSON.stringify(cfg.origin)})) {
+  await page.goto(${JSON.stringify(cfg.videoPage)}, { timeout: 60000 });
+}
+if (${inject ? "true" : "false"}) {
+  await page.cdp("Network.enable");
+  for (const n of ${JSON.stringify(cfg.cookieNames)}) {
+    try { await page.cdp("Network.deleteCookies", { name: n, url: ${JSON.stringify(cfg.cookieSetUrl)} }); } catch {}
+  }
+  for (const c of JAR) {
+    try {
+      await page.cdp("Network.setCookie", {
+        name: c.name, value: c.value, url: ${JSON.stringify(cfg.cookieSetUrl)},
+        ...(${raw}
+          ? { path: c.path || "/", httpOnly: c.httpOnly !== false, secure: c.secure !== false, ...(c.domain ? { domain: c.domain } : {}) }
+          : { path: "/", httpOnly: true, secure: true }),
+        ...(c.expires ? { expires: c.expires } : {}),
+      });
+    } catch {}
+  }
+}`;
   }
 
   /** 表达式放在临时文件里，避免命令行参数超长 */
@@ -574,24 +633,7 @@ const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
 const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
 let page = (await task.pages())[0];
 if (!page) page = await task.newPage();
-const cur = await page.url();
-if (!String(cur).startsWith(${JSON.stringify(UPSTREAM.origin)})) {
-  await page.goto(${JSON.stringify(UPSTREAM.videoPage)}, { timeout: 60000 });
-}
-if (INJECT) {
-  await page.cdp("Network.enable");
-  for (const n of ["h3v", "h3s", "__Host-h3d"]) {
-    try { await page.cdp("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }); } catch {}
-  }
-  for (const c of JAR) {
-    try {
-      await page.cdp("Network.setCookie", {
-        name: c.name, value: c.value, url: "https://www.paba.tv/", path: "/",
-        httpOnly: true, secure: true, ...(c.expires ? { expires: c.expires } : {}),
-      });
-    } catch {}
-  }
-}
+${this.egoInjectBlock(jar, inject)}
 const EVAL_TO = ${Math.min(600_000, Math.max(15_000, timeoutMs - 30_000))};
 try { await page.setDefaultTimeout(EVAL_TO); } catch {}
 const value = await page.evaluate(EXPR);
@@ -612,24 +654,7 @@ const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
 const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
 let page = (await task.pages())[0];
 if (!page) page = await task.newPage();
-const cur = await page.url();
-if (!String(cur).startsWith(${JSON.stringify(UPSTREAM.origin)})) {
-  await page.goto(${JSON.stringify(UPSTREAM.videoPage)}, { timeout: 60000 });
-}
-if (INJECT) {
-  await page.cdp("Network.enable");
-  for (const n of ["h3v", "h3s", "__Host-h3d"]) {
-    try { await page.cdp("Network.deleteCookies", { name: n, url: "https://www.paba.tv/" }); } catch {}
-  }
-  for (const c of JAR) {
-    try {
-      await page.cdp("Network.setCookie", {
-        name: c.name, value: c.value, url: "https://www.paba.tv/", path: "/",
-        httpOnly: true, secure: true, ...(c.expires ? { expires: c.expires } : {}),
-      });
-    } catch {}
-  }
-}
+${this.egoInjectBlock(jar, inject)}
 const EVAL_TO = ${Math.min(600_000, Math.max(15_000, timeoutMs - 30_000))};
 try { await page.setDefaultTimeout(EVAL_TO); } catch {}
 const value = await page.evaluate(EXPR);
@@ -639,12 +664,13 @@ console.log("__FS__" + JSON.stringify(value === undefined ? null : value));
   }
 
   async solveChallenge({ timeoutMs = 150_000 } = {}) {
+    if (!this.cfg.challengePage) throw new Error(`${this.cfg.id} 无独立验证页，请在浏览器内完成验证后重新同步`);
     const script = `
 const SPACE = ${JSON.stringify(this.spaceName)};
 const entry = (await listTaskSpaces()).find((s) => s.name === SPACE);
 const task = entry ? await taskSpace(entry.id) : await taskSpace(SPACE);
 let page = (await task.pages())[0] || (await task.newPage());
-await page.goto(${JSON.stringify(UPSTREAM.challengePage)}, { timeout: 45000 });
+await page.goto(${JSON.stringify(this.cfg.challengePage)}, { timeout: 45000 });
 const deadline = Date.now() + ${timeoutMs};
 let ok = false;
 while (Date.now() < deadline) {
@@ -652,7 +678,7 @@ while (Date.now() < deadline) {
   if (v && v.ok) { ok = true; break; }
   await page.waitForTimeout(500);
 }
-await page.goto(${JSON.stringify(UPSTREAM.videoPage)}, { timeout: 45000 });
+await page.goto(${JSON.stringify(this.cfg.videoPage)}, { timeout: 45000 });
 console.log("__FS__" + JSON.stringify({ ok }));
 `;
     const out = await this.execRaw(script, timeoutMs + 60_000);
@@ -674,7 +700,7 @@ const lanes = new Map();
 
 export function laneFor(account) {
   const backend = account.backend || process.env.LANE || "chrome";
-  const key = `${account.id}:${backend}`;
+  const key = `${account.provider || "paba"}:${account.id}:${backend}`;
   const cur = lanes.get(key);
   if (cur) {
     cur.account = account;
